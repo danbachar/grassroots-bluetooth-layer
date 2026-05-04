@@ -1,0 +1,35 @@
+# Pub / Dart caches.
+.dart_tool/
+.packages
+pubspec.lock
+
+# Build outputs.
+build/
+**/android/build/
+**/android/.gradle/
+**/android/local.properties
+**/android/captures/
+
+# iOS / CocoaPods.
+**/ios/Pods/
+**/ios/.symlinks/
+**/ios/Flutter/Flutter.framework
+**/ios/Flutter/Flutter.podspec
+**/ios/.generated/
+
+# Flutter caches.
+.flutter-plugins
+.flutter-plugins-dependencies
+.metadata
+
+# Generated docs.
+doc/api/
+
+# IDE.
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# Coverage.
+coverage/
