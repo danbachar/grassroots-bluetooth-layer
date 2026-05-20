@@ -321,7 +321,7 @@ struct BlePath {
   var platformDeviceId: String? = nil
   var serviceUuid: String? = nil
   var characteristicUuid: String? = nil
-  var rssi: Int64
+  var rssi: Int64? = nil
   var mtu: Int64
   var canSend: Bool
   var error: String? = nil
@@ -333,7 +333,7 @@ struct BlePath {
     let platformDeviceId: String? = nilOrValue(list[3])
     let serviceUuid: String? = nilOrValue(list[4])
     let characteristicUuid: String? = nilOrValue(list[5])
-    let rssi = list[6] is Int64 ? list[6] as! Int64 : Int64(list[6] as! Int32)
+    let rssi: Int64? = isNullish(list[6]) ? nil : (list[6] is Int64? ? list[6] as! Int64? : Int64(list[6] as! Int32))
     let mtu = list[7] is Int64 ? list[7] as! Int64 : Int64(list[7] as! Int32)
     let canSend = list[8] as! Bool
     let error: String? = nilOrValue(list[9])
@@ -372,13 +372,13 @@ struct BlePayload {
   var pathId: String
   var role: BleRole
   var value: FlutterStandardTypedData
-  var rssi: Int64
+  var rssi: Int64? = nil
 
   static func fromList(_ list: [Any?]) -> BlePayload? {
     let pathId = list[0] as! String
     let role = BleRole(rawValue: list[1] as! Int)!
     let value = list[2] as! FlutterStandardTypedData
-    let rssi = list[3] is Int64 ? list[3] as! Int64 : Int64(list[3] as! Int32)
+    let rssi: Int64? = isNullish(list[3]) ? nil : (list[3] is Int64? ? list[3] as! Int64? : Int64(list[3] as! Int32))
 
     return BlePayload(
       pathId: pathId,

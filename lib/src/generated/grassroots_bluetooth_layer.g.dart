@@ -350,7 +350,7 @@ class BlePath {
     this.platformDeviceId,
     this.serviceUuid,
     this.characteristicUuid,
-    required this.rssi,
+    this.rssi,
     required this.mtu,
     required this.canSend,
     this.error,
@@ -368,7 +368,7 @@ class BlePath {
 
   String? characteristicUuid;
 
-  int rssi;
+  int? rssi;
 
   int mtu;
 
@@ -400,7 +400,7 @@ class BlePath {
       platformDeviceId: result[3] as String?,
       serviceUuid: result[4] as String?,
       characteristicUuid: result[5] as String?,
-      rssi: result[6]! as int,
+      rssi: result[6] as int?,
       mtu: result[7]! as int,
       canSend: result[8]! as bool,
       error: result[9] as String?,
@@ -413,7 +413,7 @@ class BlePayload {
     required this.pathId,
     required this.role,
     required this.value,
-    required this.rssi,
+    this.rssi,
   });
 
   String pathId;
@@ -422,7 +422,7 @@ class BlePayload {
 
   Uint8List value;
 
-  int rssi;
+  int? rssi;
 
   Object encode() {
     return <Object?>[
@@ -439,7 +439,7 @@ class BlePayload {
       pathId: result[0]! as String,
       role: BleRole.values[result[1]! as int],
       value: result[2]! as Uint8List,
-      rssi: result[3]! as int,
+      rssi: result[3] as int?,
     );
   }
 }

@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "GrassrootsBluetoothPlugin"
 private const val DEFAULT_ATT_MTU = 23
-private const val DEFAULT_RSSI = -100
+private const val RSSI_POLL_INTERVAL_MS = 2_000L
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 @SuppressLint("MissingPermission")
@@ -84,12 +84,13 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         var serviceUuid: UUID? = null,
         var characteristicUuid: UUID? = null,
         var state: BlePathState = BlePathState.DISCOVERED,
-        var rssi: Int = DEFAULT_RSSI,
+        var rssi: Int? = null,
         var mtu: Int = DEFAULT_ATT_MTU,
         var canSend: Boolean = false,
         var subscribeRequested: Boolean = true,
         var subscriptionReady: Boolean = false,
         var connectTimeoutRunnable: Runnable? = null,
+        var rssiPollRunnable: Runnable? = null,
         var forgetOnDisconnect: Boolean = false,
         var error: String? = null,
         // Android only allows ONE outstanding GATT operation (write,
@@ -120,6 +121,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         ) : GattOp()
 
         object DiscoverServices : GattOp()
+        object ReadRemoteRssi : GattOp()
         data class RequestMtu(val mtu: Int) : GattOp()
     }
 
@@ -130,7 +132,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         var serviceUuid: UUID? = null,
         var characteristicUuid: UUID? = null,
         var state: BlePathState = BlePathState.CONNECTED,
-        var rssi: Int = DEFAULT_RSSI,
+        var rssi: Int? = null,
         var mtu: Int = DEFAULT_ATT_MTU,
         var subscribed: Boolean = false,
         var canSend: Boolean = false,
@@ -427,7 +429,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             serviceUuid = serviceUuid,
             characteristicUuid = characteristicUuid,
             state = BlePathState.CONNECTING,
-            rssi = existing?.rssi ?: DEFAULT_RSSI,
+            rssi = existing?.rssi,
             subscribeRequested = request.subscribeToNotifications,
         )
         centralPaths[pathId] = path
@@ -503,6 +505,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 centralPaths.values.forEach { path ->
                     path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                     path.connectTimeoutRunnable = null
+                    stopCentralRssiPoll(path)
                     safeDisconnectAndClose(path)
                     path.state = BlePathState.DISCONNECTED
                     path.canSend = false
@@ -520,6 +523,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 val pathId = peripheralPathId(device.address)
                 when (newState) {
                     BluetoothProfile.STATE_CONNECTED -> {
+                        val previousState = peripheralPaths[pathId]?.state
+                        logToFlutter(
+                            "BLE peripheral onConnectionStateChange: pathId=$pathId " +
+                                "addr=${device.address} previousState=$previousState " +
+                                "newState=CONNECTED ${decodeGattStatus(status)}"
+                        )
                         val path = PeripheralPath(
                             pathId = pathId,
                             address = normalizeAddress(device.address),
@@ -534,6 +543,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     }
                     BluetoothProfile.STATE_DISCONNECTED -> {
                         val path = peripheralPaths[pathId]
+                        logToFlutter(
+                            "BLE peripheral onConnectionStateChange: pathId=$pathId " +
+                                "addr=${device.address} previousState=${path?.state} " +
+                                "subscribed=${path?.subscribed} " +
+                                "newState=DISCONNECTED ${decodeGattStatus(status)}"
+                        )
                         if (path != null) {
                             path.state = BlePathState.DISCONNECTED
                             path.canSend = false
@@ -544,6 +559,13 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                                 peripheralPaths.remove(pathId)
                             }
                         }
+                    }
+                    else -> {
+                        logToFlutter(
+                            "BLE peripheral onConnectionStateChange: pathId=$pathId " +
+                                "addr=${device.address} newState=$newState " +
+                                "${decodeGattStatus(status)} (intermediate)"
+                        )
                     }
                 }
             }
@@ -655,7 +677,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                         pathId = pathId,
                         role = BleRole.PERIPHERAL,
                         value = value,
-                        rssi = peripheralPaths[pathId]?.rssi?.toLong() ?: DEFAULT_RSSI.toLong(),
+                        rssi = peripheralPaths[pathId]?.rssi?.toLong(),
                     ),
                 )
             }
@@ -803,6 +825,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     when {
                         newState == BluetoothProfile.STATE_CONNECTED &&
                             status == BluetoothGatt.GATT_SUCCESS -> {
+                            val previousState = path.state
+                            logToFlutter(
+                                "BLE central onConnectionStateChange: pathId=$pathId " +
+                                    "addr=${path.address} previousState=$previousState " +
+                                    "newState=CONNECTED ${decodeGattStatus(status)}"
+                            )
                             path.gatt = gatt
                             path.device = gatt.device
                             path.state = BlePathState.CONNECTED
@@ -818,8 +846,22 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             }
                         }
                         newState == BluetoothProfile.STATE_DISCONNECTED -> {
+                            val previousState = path.state
+                            // High-value diagnostic — log BEFORE mutating
+                            // path state so we capture what we were doing
+                            // when the link dropped (CONNECTING / CONNECTED
+                            // / SUBSCRIBED / READY all imply different
+                            // root causes).
+                            logToFlutter(
+                                "BLE central onConnectionStateChange: pathId=$pathId " +
+                                    "addr=${path.address} previousState=$previousState " +
+                                    "newState=DISCONNECTED ${decodeGattStatus(status)} " +
+                                    "pendingOps=${path.pendingOps.size} " +
+                                    "inFlightOp=${path.inFlightOp?.javaClass?.simpleName ?: "none"}"
+                            )
                             path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
                             path.connectTimeoutRunnable = null
+                            stopCentralRssiPoll(path)
                             path.gatt = null
                             path.characteristic = null
                             path.state = if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -841,6 +883,15 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             if (path.forgetOnDisconnect) {
                                 centralPaths.remove(pathId)
                             }
+                        }
+                        else -> {
+                            // Surface other transient state changes (STATE_CONNECTING,
+                            // STATE_DISCONNECTING) so partial-link issues are visible.
+                            logToFlutter(
+                                "BLE central onConnectionStateChange: pathId=$pathId " +
+                                    "addr=${path.address} newState=$newState " +
+                                    "${decodeGattStatus(status)} (intermediate)"
+                            )
                         }
                     }
                 }
@@ -950,11 +1001,13 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
             override fun onReadRemoteRssi(gatt: BluetoothGatt, rssi: Int, status: Int) {
                 mainHandler.post {
+                    finishGattOp(pathId)
+                    val path = centralPaths[pathId] ?: return@post
                     if (status == BluetoothGatt.GATT_SUCCESS) {
-                        val path = centralPaths[pathId] ?: return@post
                         path.rssi = rssi
                         emitPath(path.toBlePath())
                     }
+                    scheduleCentralRssiPoll(pathId)
                 }
             }
         }
@@ -989,6 +1042,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             GattOp.DiscoverServices -> {
                 gatt.discoverServices()
             }
+            GattOp.ReadRemoteRssi -> {
+                gatt.readRemoteRssi()
+            }
             is GattOp.WriteDescriptor -> {
                 writeDescriptorCompat(gatt, op.descriptor, op.value)
             }
@@ -1002,6 +1058,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             // wedge — and surface an error log for the failed op.
             logToFlutter("GATT op kicked off failed for $pathId: ${op::class.java.simpleName}")
             path.inFlightOp = null
+            if (op === GattOp.ReadRemoteRssi) {
+                scheduleCentralRssiPoll(pathId)
+            }
             // Schedule rather than recurse, in case kicking off the next op
             // synchronously fails too — bounded by queue size.
             mainHandler.post { startNextGattOp(pathId) }
@@ -1043,7 +1102,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     pathId = pathId,
                     role = BleRole.CENTRAL,
                     value = value,
-                    rssi = path.rssi.toLong(),
+                    rssi = path.rssi?.toLong(),
                 ),
             )
         }
@@ -1093,18 +1152,52 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         path.canSend = path.characteristic?.canWrite() == true
         path.error = null
         emitPath(path.toBlePath())
+        requestCentralRssi(pathId)
     }
 
     private fun failCentralPath(pathId: String, message: String) {
         val path = centralPaths[pathId] ?: return
         path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         path.connectTimeoutRunnable = null
+        stopCentralRssiPoll(path)
         path.state = BlePathState.FAILED
         path.canSend = false
         path.subscriptionReady = false
         path.error = message
         emitPath(path.toBlePath())
         logToFlutter("Path $pathId failed: $message")
+    }
+
+    private fun requestCentralRssi(pathId: String) {
+        val path = centralPaths[pathId] ?: return
+        if (!path.canPollRssi()) return
+        if (path.inFlightOp === GattOp.ReadRemoteRssi ||
+            path.pendingOps.any { it === GattOp.ReadRemoteRssi }
+        ) {
+            return
+        }
+        enqueueGattOp(pathId, GattOp.ReadRemoteRssi)
+    }
+
+    private fun scheduleCentralRssiPoll(pathId: String) {
+        val path = centralPaths[pathId] ?: return
+        stopCentralRssiPoll(path)
+        if (!path.canPollRssi()) return
+        val runnable = Runnable { requestCentralRssi(pathId) }
+        path.rssiPollRunnable = runnable
+        mainHandler.postDelayed(runnable, RSSI_POLL_INTERVAL_MS)
+    }
+
+    private fun stopCentralRssiPoll(path: CentralPath) {
+        path.rssiPollRunnable?.let { mainHandler.removeCallbacks(it) }
+        path.rssiPollRunnable = null
+    }
+
+    private fun CentralPath.canPollRssi(): Boolean {
+        return gatt != null &&
+            state != BlePathState.DISCONNECTED &&
+            state != BlePathState.FAILED &&
+            state != BlePathState.STALE
     }
 
     private fun disconnectCentral(request: BleDisconnectRequest) {
@@ -1115,6 +1208,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         )
         path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
         path.connectTimeoutRunnable = null
+        stopCentralRssiPoll(path)
         path.forgetOnDisconnect = request.forget
         path.canSend = false
         path.subscriptionReady = false
@@ -1409,6 +1503,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         centralPaths.values.forEach { path ->
             path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             path.connectTimeoutRunnable = null
+            stopCentralRssiPoll(path)
             safeDisconnectAndClose(path)
             path.state = BlePathState.DISCONNECTED
             path.canSend = false
@@ -1420,6 +1515,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     private fun safeDisconnectAndClose(path: CentralPath) {
+        stopCentralRssiPoll(path)
         val gatt = path.gatt ?: return
         try {
             gatt.disconnect()
@@ -1550,7 +1646,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             platformDeviceId = address,
             serviceUuid = serviceUuid?.toString(),
             characteristicUuid = characteristicUuid?.toString(),
-            rssi = rssi.toLong(),
+            rssi = rssi?.toLong(),
             mtu = mtu.toLong(),
             canSend = canSend,
             error = error,
@@ -1565,7 +1661,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             platformDeviceId = address,
             serviceUuid = serviceUuid?.toString(),
             characteristicUuid = characteristicUuid?.toString(),
-            rssi = rssi.toLong(),
+            rssi = rssi?.toLong(),
             mtu = mtu.toLong(),
             canSend = canSend,
             error = error,
@@ -1719,7 +1815,37 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     private fun statusMessageOrNull(status: Int): String? {
-        return if (status == BluetoothGatt.GATT_SUCCESS) null else "GATT status $status"
+        return if (status == BluetoothGatt.GATT_SUCCESS) null else decodeGattStatus(status)
+    }
+
+    /// Decode a GATT / HCI status code to a human-readable name. Common
+    /// disconnect reasons are not all exposed by the public `BluetoothGatt`
+    /// class; values are taken from `gatt_api.h` / `hci_status.h` in AOSP.
+    /// Always returns "GATT status N (NAME)" so the raw code stays
+    /// inspectable when triaging logs.
+    private fun decodeGattStatus(status: Int): String {
+        val name = when (status) {
+            0 -> "SUCCESS"
+            1 -> "GATT_INVALID_HANDLE"
+            2 -> "GATT_READ_NOT_PERMIT"
+            3 -> "GATT_WRITE_NOT_PERMIT"
+            5 -> "GATT_INSUF_AUTHENTICATION"
+            6 -> "GATT_REQ_NOT_SUPPORTED"
+            7 -> "GATT_INVALID_OFFSET"
+            8 -> "GATT_CONN_TIMEOUT (supervision timeout)"
+            13 -> "GATT_INVALID_ATTR_LEN"
+            15 -> "GATT_INSUF_ENCRYPTION"
+            19 -> "GATT_CONN_TERMINATE_PEER_USER (remote disconnected)"
+            20 -> "GATT_CONN_TERMINATE_LOCAL_HOST"
+            22 -> "GATT_CONN_TERMINATE_LOCAL_HOST (we called disconnect)"
+            34 -> "GATT_CONN_LMP_TIMEOUT"
+            62 -> "GATT_CONN_FAIL_ESTABLISH (link couldn't be established)"
+            133 -> "GATT_ERROR (generic; often cache/scan/radio)"
+            143 -> "GATT_CONN_CANCEL"
+            256 -> "GATT_CONN_CANCEL"
+            else -> "UNKNOWN"
+        }
+        return "GATT status $status ($name)"
     }
 
     private fun advertiseFailureMessage(errorCode: Int): String {

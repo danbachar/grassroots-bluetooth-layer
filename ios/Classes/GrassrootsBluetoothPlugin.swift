@@ -195,10 +195,14 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     scanTimer = nil
     scanRequest = request
 
+    log("startScan requested: serviceUuidPrefix=\(request.serviceUuidPrefix ?? "<none>") "
+      + "serviceUuids=\(request.serviceUuids.compactMap { $0 }) "
+      + "timeoutMs=\(request.timeoutMs) allowDuplicates=\(request.allowDuplicates)")
+
     if centralManager.state == .poweredOn {
       startScanIfReady()
     } else {
-      log("Deferring scan until central manager is powered on.")
+      log("Deferring scan until central manager is powered on (currentState=\(describe(centralManager.state))).")
     }
 
     if request.timeoutMs > 0 {
@@ -214,6 +218,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     scanTimer = nil
     scanRequest = nil
     centralManager?.stopScan()
+    log("Scan stopped")
   }
 
   func connect(request: BleConnectRequest) throws -> BlePath {
@@ -444,6 +449,9 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       CBCentralManagerScanOptionAllowDuplicatesKey: request.allowDuplicates
     ]
     centralManager.scanForPeripherals(withServices: services, options: options)
+    let servicesDesc = services?.map { $0.uuidString }.joined(separator: ",") ?? "<any>"
+    log("Scan started: services=[\(servicesDesc)] allowDuplicates=\(request.allowDuplicates) "
+      + "(post-filter prefix=\(request.serviceUuidPrefix ?? "<none>"))")
   }
 
   private func lookupPeripheral(remoteId: String) -> CBPeripheral? {
@@ -841,6 +849,41 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     flutterApi.onLog(message: message) { _ in }
   }
 
+  /// Decode a CoreBluetooth disconnect/connect error into a stable, raw
+  /// string that includes both the CBError numeric code and Apple's
+  /// localizedDescription. The raw code is what we need to triage drops;
+  /// the localized description is what humans recognise.
+  private func describeDisconnectError(_ error: Error?) -> String {
+    guard let error = error else { return "error=nil (clean disconnect)" }
+    let ns = error as NSError
+    let name: String
+    if ns.domain == CBErrorDomain, let code = CBError.Code(rawValue: ns.code) {
+      switch code {
+      case .unknown: name = "CBError.unknown"
+      case .invalidParameters: name = "CBError.invalidParameters"
+      case .invalidHandle: name = "CBError.invalidHandle"
+      case .notConnected: name = "CBError.notConnected"
+      case .outOfSpace: name = "CBError.outOfSpace"
+      case .operationCancelled: name = "CBError.operationCancelled"
+      case .connectionTimeout: name = "CBError.connectionTimeout (supervision timeout)"
+      case .peripheralDisconnected: name = "CBError.peripheralDisconnected (remote side dropped link)"
+      case .uuidNotAllowed: name = "CBError.uuidNotAllowed"
+      case .alreadyAdvertising: name = "CBError.alreadyAdvertising"
+      case .connectionFailed: name = "CBError.connectionFailed"
+      case .connectionLimitReached: name = "CBError.connectionLimitReached"
+      case .unkownDevice: name = "CBError.unknownDevice"
+      case .operationNotSupported: name = "CBError.operationNotSupported"
+      case .peerRemovedPairingInformation: name = "CBError.peerRemovedPairingInformation"
+      case .encryptionTimedOut: name = "CBError.encryptionTimedOut"
+      case .tooManyLEPairedDevices: name = "CBError.tooManyLEPairedDevices"
+      @unknown default: name = "CBError.unknown(\(ns.code))"
+      }
+    } else {
+      name = "\(ns.domain)"
+    }
+    return "error=\(name) code=\(ns.code) desc=\(ns.localizedDescription)"
+  }
+
   private func flutterError(_ code: String, _ message: String) -> FlutterError {
     FlutterError(code: code, message: message, details: nil)
   }
@@ -1003,6 +1046,12 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
 
   func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
     let pathId = Self.centralPathId(for: peripheral)
+    let previousState = centralPaths[pathId]?.state
+    log(
+      "BLE central didDisconnectPeripheral: pathId=\(pathId) " +
+      "uuid=\(peripheral.identifier.uuidString) previousState=\(previousState.map { String(describing: $0) } ?? "nil") " +
+      "\(describeDisconnectError(error))"
+    )
     pendingCentralWrites.removeValue(forKey: pathId)
     connectTimers[pathId]?.invalidate()
     connectTimers.removeValue(forKey: pathId)
@@ -1011,6 +1060,12 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
 
   func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
     let pathId = Self.centralPathId(for: peripheral)
+    let previousState = centralPaths[pathId]?.state
+    log(
+      "BLE central didFailToConnect: pathId=\(pathId) " +
+      "uuid=\(peripheral.identifier.uuidString) previousState=\(previousState.map { String(describing: $0) } ?? "nil") " +
+      "\(describeDisconnectError(error))"
+    )
     pendingCentralWrites.removeValue(forKey: pathId)
     connectTimers[pathId]?.invalidate()
     connectTimers.removeValue(forKey: pathId)
@@ -1320,8 +1375,15 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
 
   func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didSubscribeTo characteristic: CBCharacteristic) {
     guard characteristic.uuid == advertisedCharacteristicUuid else { return }
+    let pathId = Self.peripheralPathId(for: central)
+    let previousState = peripheralPaths[pathId]?.state
+    log(
+      "BLE peripheral didSubscribeTo: pathId=\(pathId) " +
+      "uuid=\(central.identifier.uuidString) previousState=\(previousState.map { String(describing: $0) } ?? "nil") " +
+      "maxUpdateValueLength=\(central.maximumUpdateValueLength)"
+    )
     upsertPeripheralPath(for: central, state: .subscribed, subscribed: true)
-    if var path = peripheralPaths[Self.peripheralPathId(for: central)] {
+    if var path = peripheralPaths[pathId] {
       path.state = .ready
       peripheralPaths[path.pathId] = path
       emitPath(self.path(forPeripheralPathId: path.pathId))
@@ -1332,6 +1394,15 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
   func peripheralManager(_ peripheral: CBPeripheralManager, central: CBCentral, didUnsubscribeFrom characteristic: CBCharacteristic) {
     guard characteristic.uuid == advertisedCharacteristicUuid else { return }
     let pathId = Self.peripheralPathId(for: central)
+    let previousState = peripheralPaths[pathId]?.state
+    // On iOS the peripheral never sees an explicit "central disconnected"
+    // callback — `didUnsubscribeFrom` is the only signal that the link
+    // is gone. Log it explicitly so the trail is symmetric with Android.
+    log(
+      "BLE peripheral didUnsubscribeFrom: pathId=\(pathId) " +
+      "uuid=\(central.identifier.uuidString) previousState=\(previousState.map { String(describing: $0) } ?? "nil") " +
+      "(treating as disconnect)"
+    )
     pendingPeripheralUpdates.removeAll { $0.pathId == pathId }
     markPeripheralPath(pathId: pathId, state: .disconnected, canKeep: true, error: nil)
   }

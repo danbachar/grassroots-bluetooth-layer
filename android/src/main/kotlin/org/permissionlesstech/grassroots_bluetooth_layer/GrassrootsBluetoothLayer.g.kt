@@ -330,7 +330,7 @@ data class BlePath (
   val platformDeviceId: String? = null,
   val serviceUuid: String? = null,
   val characteristicUuid: String? = null,
-  val rssi: Long,
+  val rssi: Long? = null,
   val mtu: Long,
   val canSend: Boolean,
   val error: String? = null
@@ -345,7 +345,7 @@ data class BlePath (
       val platformDeviceId = list[3] as String?
       val serviceUuid = list[4] as String?
       val characteristicUuid = list[5] as String?
-      val rssi = list[6].let { if (it is Int) it.toLong() else it as Long }
+      val rssi = list[6].let { if (it is Int) it.toLong() else it as Long? }
       val mtu = list[7].let { if (it is Int) it.toLong() else it as Long }
       val canSend = list[8] as Boolean
       val error = list[9] as String?
@@ -373,7 +373,7 @@ data class BlePayload (
   val pathId: String,
   val role: BleRole,
   val value: ByteArray,
-  val rssi: Long
+  val rssi: Long? = null
 
 ) {
   companion object {
@@ -382,7 +382,7 @@ data class BlePayload (
       val pathId = list[0] as String
       val role = BleRole.ofRaw(list[1] as Int)!!
       val value = list[2] as ByteArray
-      val rssi = list[3].let { if (it is Int) it.toLong() else it as Long }
+      val rssi = list[3].let { if (it is Int) it.toLong() else it as Long? }
       return BlePayload(pathId, role, value, rssi)
     }
   }

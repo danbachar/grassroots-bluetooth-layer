@@ -33,3 +33,6 @@ doc/api/
 
 # Coverage.
 coverage/
+
+# Agent tooling state.
+.claude-flow/

@@ -164,7 +164,7 @@ class BlePath {
   String? platformDeviceId;
   String? serviceUuid;
   String? characteristicUuid;
-  int rssi;
+  int? rssi;
   int mtu;
   bool canSend;
   String? error;
@@ -176,7 +176,7 @@ class BlePath {
     this.platformDeviceId,
     this.serviceUuid,
     this.characteristicUuid,
-    this.rssi = -100,
+    this.rssi,
     this.mtu = 23,
     this.canSend = false,
     this.error,
@@ -187,13 +187,13 @@ class BlePayload {
   String pathId;
   BleRole role;
   Uint8List value;
-  int rssi;
+  int? rssi;
 
   BlePayload({
     required this.pathId,
     required this.role,
     required this.value,
-    this.rssi = -100,
+    this.rssi,
   });
 }
 
