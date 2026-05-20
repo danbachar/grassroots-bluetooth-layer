@@ -759,9 +759,17 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
 
     let advertisedServices = advertisementServiceUuids(from: advertisementData)
     let lowerServices = advertisedServices.map { $0.lowercased() }
+    // `CBUUID.uuidString` returns 128-bit UUIDs in dashed form
+    // ("84c40316-0871-e5ad-…"), while callers typically pass `serviceUuidPrefix`
+    // as compact hex ("84c403160871e5ad"). Normalize both to dashless hex so
+    // `hasPrefix` works regardless of how the caller wrote the prefix.
+    let dashlessLowerServices = lowerServices.map {
+      $0.replacingOccurrences(of: "-", with: "")
+    }
 
-    if let prefix = request.serviceUuidPrefix?.lowercased(), !prefix.isEmpty {
-      guard lowerServices.contains(where: { $0.hasPrefix(prefix) }) else {
+    if let prefixRaw = request.serviceUuidPrefix?.lowercased(), !prefixRaw.isEmpty {
+      let prefix = prefixRaw.replacingOccurrences(of: "-", with: "")
+      guard dashlessLowerServices.contains(where: { $0.hasPrefix(prefix) }) else {
         return false
       }
     }
@@ -982,9 +990,36 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
-    guard advertisementMatchesScanRequest(advertisementData) else { return }
-
     let remoteId = peripheral.identifier.uuidString
+    let rawServiceUuids = advertisementServiceUuids(from: advertisementData)
+    let advertisedName = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "<unnamed>"
+
+    if !advertisementMatchesScanRequest(advertisementData) {
+      // Only log rejections from devices that *look like* Grassroots peers —
+      // i.e. they advertise at least one service UUID matching our prefix.
+      // Without this gate every nearby AirPod / watch / beacon produces a
+      // line, drowning the actual diagnostic signal. The interesting case
+      // is "advertisement has Grassroots-shaped UUID but our exact-match
+      // filter still rejected it"; everything else is environmental noise.
+      let prefix = (scanRequest?.serviceUuidPrefix?.lowercased() ?? "")
+        .replacingOccurrences(of: "-", with: "")
+      let looksGrassroots = !prefix.isEmpty
+        && rawServiceUuids.contains(where: {
+          $0.lowercased()
+            .replacingOccurrences(of: "-", with: "")
+            .hasPrefix(prefix)
+        })
+      if looksGrassroots {
+        log("Scan: rejected advertisement remoteId=\(remoteId) name=\(advertisedName) "
+          + "rssi=\(RSSI.int64Value) services=[\(rawServiceUuids.joined(separator: ","))] "
+          + "(prefix=\(scanRequest?.serviceUuidPrefix ?? "<none>"))")
+      }
+      return
+    }
+
+    log("Scan: accepted advertisement remoteId=\(remoteId) name=\(advertisedName) "
+      + "rssi=\(RSSI.int64Value) services=[\(rawServiceUuids.joined(separator: ","))]")
+
     knownPeripherals[remoteId] = peripheral
 
     let serviceUuids = advertisementServiceUuids(from: advertisementData)
