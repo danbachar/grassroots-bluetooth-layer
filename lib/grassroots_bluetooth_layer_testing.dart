@@ -1,6 +1,6 @@
 library grassroots_bluetooth_layer_testing;
 
-export 'src/grassroots_bluetooth_layer.dart' show GrassrootsBluetooth, FakeGrassrootsBluetoothCallbacks;
+export 'src/grassroots_bluetooth_layer.dart' show GrassrootsBluetooth, FakeGrassrootsBluetoothCallbacks, grassrootsIosLocalName;
 export 'src/generated/grassroots_bluetooth_layer.g.dart'
     show
         GrassrootsBluetoothLayerFlutterApi,

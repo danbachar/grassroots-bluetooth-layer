@@ -266,8 +266,10 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     emitPath(path(forCentralPathId: pathId))
 
     if peripheral.state == .connected {
+      log("BLE central connect: pathId=\(pathId) peripheral already .connected — discovering services directly")
       peripheral.discoverServices([serviceUuid])
     } else {
+      log("BLE central connect: issuing centralManager.connect pathId=\(pathId) cbState=\(peripheral.state.rawValue) timeoutMs=\(request.timeoutMs)")
       centralManager.connect(peripheral, options: [
         CBConnectPeripheralOptionNotifyOnConnectionKey: true,
         CBConnectPeripheralOptionNotifyOnDisconnectionKey: true,
@@ -416,25 +418,41 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     peripheralManager.add(service)
   }
 
+  /// Fixed local name advertised by every iOS Grassroots peripheral.
+  ///
+  /// This is a platform marker, not an identity: peers that see it know the
+  /// advertiser is an iOS device and yield the first central dial to it,
+  /// because an iOS central can only open the FIRST ACL link of a pair — an
+  /// iOS-initiated second (reverse) link never reaches `didConnect`. Identity
+  /// still travels exclusively in the signed post-connection ANNOUNCE.
+  ///
+  /// Must stay in sync with `grassrootsIosLocalName` in the package's Dart
+  /// facade (lib/src/grassroots_bluetooth_layer.dart). Keep it ≤ 8 ASCII
+  /// chars: the 128-bit service UUID consumes 18 of the 28 advertise-packet
+  /// bytes, and CoreBluetooth only guarantees ~10 bytes for a local name
+  /// (scan response) before silently truncating it.
+  private static let grassrootsIosLocalName = "grs-ios"
+
   private func buildAdvertisementData() -> [String: Any] {
     guard let request = advertiseRequest,
           let serviceUuid = advertisedServiceUuid else { return [:] }
 
-    // iOS deliberately encodes 128-bit service UUIDs in a private "overflow"
-    // area when the primary advertise packet (31 bytes) is full. The
-    // overflow area is decodable only by other iOS apps that pre-register
-    // the exact UUID with `scanForPeripherals(withServices:)`. Including a
-    // local name (15+ bytes) on top of a 128-bit UUID overflows the packet
-    // and effectively makes the broadcast invisible to external scanners
-    // (Android, generic BLE explorers). Grassroots carries identity in the
-    // post-connection ANNOUNCE, so we omit local name + manufacturer data
-    // from the iOS advertisement to keep the UUID in the primary packet.
+    // The 128-bit service UUID stays in the primary advertise packet (18 of
+    // 28 bytes) so external scanners (Android, generic BLE explorers) can
+    // discover us; CoreBluetooth carries the short fixed local name in the
+    // scan response. The name is the iOS platform marker described on
+    // `grassrootsIosLocalName` — NOT the caller-supplied nickname, which is
+    // cosmetic, user-controlled, and long enough to risk truncation.
+    // In the background iOS drops the name and moves the UUID to the
+    // overflow area; peers then simply can't detect us as iOS and fall back
+    // to their platform-neutral dial arbitration.
     let data: [String: Any] = [
-      CBAdvertisementDataServiceUUIDsKey: [serviceUuid]
+      CBAdvertisementDataServiceUUIDsKey: [serviceUuid],
+      CBAdvertisementDataLocalNameKey: Self.grassrootsIosLocalName,
     ]
 
     if let localName = request.localName, !localName.isEmpty {
-      log("Ignoring localName='\(localName)' on iOS — keeping 128-bit service UUID in the primary advertise packet so external scanners can see it.")
+      log("Substituting localName='\(localName)' with iOS platform marker '\(Self.grassrootsIosLocalName)' — peers use it to yield the first central dial to iOS.")
     }
     if request.manufacturerData != nil || request.manufacturerId != nil {
       log("iOS peripheral advertising does not support manufacturer data via CoreBluetooth; ignored.")
@@ -602,6 +620,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
             let path = self.centralPaths[pathId],
             path.state != .ready else { return }
 
+      self.log("BLE central connect TIMEOUT after \(timeoutMs)ms: pathId=\(pathId) state=\(String(describing: path.state)) — cancelling (no didConnect within window)")
       self.centralManager?.cancelPeripheralConnection(path.peripheral)
       self.pendingCentralWrites.removeValue(forKey: pathId)
       self.markCentralPath(pathId: pathId, state: .failed, canKeep: true, error: "Connection timed out.")
@@ -1129,6 +1148,7 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
 
   func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
     let pathId = Self.centralPathId(for: peripheral)
+    log("BLE central didConnect: pathId=\(pathId) uuid=\(peripheral.identifier.uuidString) — LL link up, discovering services")
     if var path = centralPaths[pathId] {
       path.state = .connected
       path.error = nil
