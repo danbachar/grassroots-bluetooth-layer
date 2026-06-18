@@ -1,6 +1,6 @@
 name: grassroots_bluetooth_layer
 description: Unified bondless BLE central and peripheral transport plugin for Grassroots-style peer discovery.
-version: 0.1.0
+version: 0.2.0
 homepage: https://github.com/danbachar/grassroots-bluetooth-layer
 repository: https://github.com/danbachar/grassroots-bluetooth-layer
 issue_tracker: https://github.com/danbachar/grassroots-bluetooth-layer/issues
