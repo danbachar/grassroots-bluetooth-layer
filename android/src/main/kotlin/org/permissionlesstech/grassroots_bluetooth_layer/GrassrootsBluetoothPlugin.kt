@@ -42,7 +42,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "GrassrootsBluetoothPlugin"
 private const val DEFAULT_ATT_MTU = 23
-private const val RSSI_POLL_INTERVAL_MS = 2_000L
+private const val RSSI_POLL_INTERVAL_MS = 10_000L
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
 @SuppressLint("MissingPermission")
@@ -1332,6 +1332,23 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     private fun handleScanResult(result: ScanResult) {
+        // Real BLE RSSI is always negative dBm (typically -30 to -100).
+        // Some Android firmwares emit `result.rssi >= 0` for scan-result
+        // cache replays or transient hardware states where the radio has
+        // not actually measured this advertisement. Drop these entirely:
+        // we cannot trust ANY field of a ScanResult whose RSSI is bogus,
+        // and the next real-measurement tick will deliver a usable one.
+        if (result.rssi >= 0) {
+            // Diagnostic — confirms how often we drop a result and from
+            // which remote. Real-pair drops here imply the radio is
+            // delivering cached/sentinel measurements for that peer.
+            logToFlutter(
+                "Dropped scan result with non-real RSSI: " +
+                    "addr=${result.device.address} rssi=${result.rssi}",
+            )
+            return
+        }
+
         val request = currentScanRequest ?: return
         val record = result.scanRecord
         if (!scanResultMatchesRequest(record, request)) {
@@ -1840,7 +1857,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             22 -> "GATT_CONN_TERMINATE_LOCAL_HOST (we called disconnect)"
             34 -> "GATT_CONN_LMP_TIMEOUT"
             62 -> "GATT_CONN_FAIL_ESTABLISH (link couldn't be established)"
-            133 -> "GATT_ERROR (generic; often cache/scan/radio)"
+            133 -> "GATT_ERROR generic"
             143 -> "GATT_CONN_CANCEL"
             256 -> "GATT_CONN_CANCEL"
             else -> "UNKNOWN"

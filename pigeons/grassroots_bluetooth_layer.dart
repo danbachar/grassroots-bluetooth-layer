@@ -144,7 +144,7 @@ class BleAdvertisement {
     this.platformName,
     this.advertisedName,
     this.serviceUuids = const <String?>[],
-    this.rssi = -100,
+    required this.rssi,
     this.connectable = true,
     this.txPower,
     this.manufacturerData,

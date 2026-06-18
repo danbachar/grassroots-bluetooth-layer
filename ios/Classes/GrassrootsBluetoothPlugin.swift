@@ -26,7 +26,7 @@ private struct CentralPathState {
   var characteristicUuid: CBUUID?
   var characteristic: CBCharacteristic?
   var state: BlePathState
-  var rssi: Int64
+  var rssi: Int64?
   var mtu: Int64
   var notificationsRequested: Bool
   var isSubscribed: Bool
@@ -40,7 +40,7 @@ private struct PeripheralPathState {
   var serviceUuid: CBUUID?
   var characteristicUuid: CBUUID?
   var state: BlePathState
-  var rssi: Int64
+  var rssi: Int64?
   var mtu: Int64
   var isSubscribed: Bool
   var error: String?
@@ -62,6 +62,13 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
   private static let peripheralRestoreIdentifier = "org.permissionlesstech.grassroots_bluetooth_layer.peripheral"
   private static let pendingQueueCap = 256
 
+  /// Polling interval for `CBPeripheral.readRSSI()` on each live central
+  /// path. Mirrors the Android side's `RSSI_POLL_INTERVAL_MS`. 10 seconds
+  /// is a deliberate trade-off between radio cost and freshness — once a
+  /// peer is connected we don't see new advertisements from them, so this
+  /// poll is the only thing that keeps the central-side RSSI current.
+  private static let rssiPollInterval: TimeInterval = 10.0
+
   private let flutterApi: GrassrootsBluetoothLayerFlutterApi
 
   private var centralManager: CBCentralManager?
@@ -75,6 +82,11 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
   private var scanRequest: BleScanRequest?
   private var scanTimer: Timer?
   private var connectTimers: [String: Timer] = [:]
+  /// Per-pathId repeating timer that polls `CBPeripheral.readRSSI()` on
+  /// each ready central path. Without this, the central-side RSSI stays
+  /// frozen at whatever value the most recent `didDiscover` reported, and
+  /// goes stale as soon as the peer is connected.
+  private var rssiPollTimers: [String: Timer] = [:]
   private var knownPeripherals: [String: CBPeripheral] = [:]
   private var centralPaths: [String: CentralPathState] = [:]
   private var peripheralPaths: [String: PeripheralPathState] = [:]
@@ -195,10 +207,6 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     scanTimer = nil
     scanRequest = request
 
-    log("startScan requested: serviceUuidPrefix=\(request.serviceUuidPrefix ?? "<none>") "
-      + "serviceUuids=\(request.serviceUuids.compactMap { $0 }) "
-      + "timeoutMs=\(request.timeoutMs) allowDuplicates=\(request.allowDuplicates)")
-
     if centralManager.state == .poweredOn {
       startScanIfReady()
     } else {
@@ -249,7 +257,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       characteristicUuid: characteristicUuid,
       characteristic: current?.characteristic,
       state: peripheral.state == .connected ? .connected : .connecting,
-      rssi: current?.rssi ?? -100,
+      rssi: current?.rssi,
       mtu: current?.mtu ?? 23,
       notificationsRequested: request.subscribeToNotifications,
       isSubscribed: current?.isSubscribed ?? false,
@@ -276,6 +284,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       guard let path = centralPaths[request.pathId] else { return }
       connectTimers[request.pathId]?.invalidate()
       connectTimers.removeValue(forKey: request.pathId)
+      stopCentralRssiPoll(pathId: request.pathId)
       pendingCentralWrites.removeValue(forKey: request.pathId)
       centralManager?.cancelPeripheralConnection(path.peripheral)
       markCentralPath(pathId: request.pathId, state: .disconnected, canKeep: !request.forget, error: nil)
@@ -311,6 +320,8 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     scanTimer = nil
     connectTimers.values.forEach { $0.invalidate() }
     connectTimers.removeAll()
+    rssiPollTimers.values.forEach { $0.invalidate() }
+    rssiPollTimers.removeAll()
 
     for pathId in Array(centralPaths.keys) {
       if let path = centralPaths[pathId] {
@@ -449,9 +460,6 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       CBCentralManagerScanOptionAllowDuplicatesKey: request.allowDuplicates
     ]
     centralManager.scanForPeripherals(withServices: services, options: options)
-    let servicesDesc = services?.map { $0.uuidString }.joined(separator: ",") ?? "<any>"
-    log("Scan started: services=[\(servicesDesc)] allowDuplicates=\(request.allowDuplicates) "
-      + "(post-filter prefix=\(request.serviceUuidPrefix ?? "<none>"))")
   }
 
   private func lookupPeripheral(remoteId: String) -> CBPeripheral? {
@@ -612,6 +620,48 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     connectTimers[pathId]?.invalidate()
     connectTimers.removeValue(forKey: pathId)
     emitPath(self.path(forCentralPathId: pathId))
+    // Now that the central path is sendable, start polling RSSI. The
+    // first read fires immediately so the displayed value transitions
+    // from scan-time RSSI to live RSSI without a 10 s gap.
+    startCentralRssiPoll(pathId: pathId)
+  }
+
+  /// Start (or restart) periodic `readRSSI()` polling on the given central
+  /// path. Safe to call multiple times — any existing timer for the same
+  /// pathId is invalidated first.
+  private func startCentralRssiPoll(pathId: String) {
+    guard let path = centralPaths[pathId] else { return }
+    stopCentralRssiPoll(pathId: pathId)
+    path.peripheral.readRSSI()
+    rssiPollTimers[pathId] = Timer.scheduledTimer(
+      withTimeInterval: Self.rssiPollInterval,
+      repeats: true
+    ) { [weak self] timer in
+      guard let self = self else {
+        timer.invalidate()
+        return
+      }
+      guard let path = self.centralPaths[pathId] else {
+        timer.invalidate()
+        self.rssiPollTimers.removeValue(forKey: pathId)
+        return
+      }
+      // Only poll while the central path is usable; if it has gone
+      // disconnected or failed, stop the timer entirely.
+      guard path.state == .ready
+        || path.state == .connected
+        || path.state == .subscribed else {
+        timer.invalidate()
+        self.rssiPollTimers.removeValue(forKey: pathId)
+        return
+      }
+      path.peripheral.readRSSI()
+    }
+  }
+
+  private func stopCentralRssiPoll(pathId: String) {
+    rssiPollTimers[pathId]?.invalidate()
+    rssiPollTimers.removeValue(forKey: pathId)
   }
 
   private func markCentralPath(pathId: String, state: BlePathState, canKeep: Bool, error: String?) {
@@ -621,6 +671,9 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     if state == .disconnected || state == .failed {
       path.isSubscribed = false
       path.characteristic = nil
+      // The link is no longer usable for readRSSI — stop the poll loop
+      // so we don't keep firing reads against a dead peripheral.
+      stopCentralRssiPoll(pathId: pathId)
     }
     centralPaths[pathId] = path
     emitPath(self.path(forCentralPathId: pathId))
@@ -664,7 +717,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       serviceUuid: advertisedServiceUuid,
       characteristicUuid: advertisedCharacteristicUuid,
       state: state,
-      rssi: existing?.rssi ?? -100,
+      rssi: existing?.rssi,
       mtu: max(23, Int64(central.maximumUpdateValueLength + 3)),
       isSubscribed: isSubscribed,
       error: error
@@ -716,7 +769,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       platformDeviceId: nil,
       serviceUuid: nil,
       characteristicUuid: nil,
-      rssi: -100,
+      rssi: nil,
       mtu: 23,
       canSend: false,
       error: nil
@@ -837,7 +890,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     flutterApi.onPathChanged(path: path) { _ in }
   }
 
-  private func emitPayload(pathId: String, role: BleRole, value: Data, rssi: Int64) {
+  private func emitPayload(pathId: String, role: BleRole, value: Data, rssi: Int64?) {
     let payload = BlePayload(
       pathId: pathId,
       role: role,
@@ -978,7 +1031,7 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
         characteristicUuid: centralPaths[pathId]?.characteristicUuid,
         characteristic: centralPaths[pathId]?.characteristic,
         state: mappedState,
-        rssi: centralPaths[pathId]?.rssi ?? -100,
+        rssi: centralPaths[pathId]?.rssi,
         mtu: centralMtu(for: peripheral),
         notificationsRequested: centralPaths[pathId]?.notificationsRequested ?? true,
         isSubscribed: centralPaths[pathId]?.isSubscribed ?? false,
@@ -990,6 +1043,21 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
   }
 
   func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
+    // Apple uses RSSI = 127 (NSNotFound) to signal "value cannot be read"
+    // when CoreBluetooth replays a peripheral discovery without a fresh
+    // hardware measurement (e.g. cache replays after a brief scan
+    // suspension). Real BLE RSSI is always negative dBm. Drop the
+    // discovery entirely — the next scan tick with a real measurement
+    // will deliver a usable advertisement.
+    if RSSI.intValue >= 0 {
+      // Diagnostic — confirms how often we drop a discovery and from
+      // which peripheral. Real-pair drops here imply CoreBluetooth is
+      // replaying without a fresh measurement for that peer.
+      log("Dropped discovery with non-real RSSI: "
+        + "remoteId=\(peripheral.identifier.uuidString) rssi=\(RSSI.intValue)")
+      return
+    }
+
     let remoteId = peripheral.identifier.uuidString
     let rawServiceUuids = advertisementServiceUuids(from: advertisementData)
     let advertisedName = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name ?? "<unnamed>"
@@ -1016,9 +1084,6 @@ extension GrassrootsBluetoothDarwin: CBCentralManagerDelegate {
       }
       return
     }
-
-    log("Scan: accepted advertisement remoteId=\(remoteId) name=\(advertisedName) "
-      + "rssi=\(RSSI.int64Value) services=[\(rawServiceUuids.joined(separator: ","))]")
 
     knownPeripherals[remoteId] = peripheral
 
@@ -1206,7 +1271,7 @@ extension GrassrootsBluetoothDarwin: CBPeripheralDelegate {
       return
     }
     guard let value = characteristic.value, !value.isEmpty else { return }
-    emitPayload(pathId: pathId, role: .central, value: value, rssi: centralPaths[pathId]?.rssi ?? -100)
+    emitPayload(pathId: pathId, role: .central, value: value, rssi: centralPaths[pathId]?.rssi)
   }
 
   func peripheral(_ peripheral: CBPeripheral, didWriteValueFor characteristic: CBCharacteristic, error: Error?) {
@@ -1220,6 +1285,26 @@ extension GrassrootsBluetoothDarwin: CBPeripheralDelegate {
 
   func peripheralIsReady(toSendWriteWithoutResponse peripheral: CBPeripheral) {
     drainCentralWrites(for: peripheral)
+  }
+
+  /// CoreBluetooth's response to `peripheral.readRSSI()`. We use this both
+  /// from the periodic `rssiPollTimers` and as the first read kicked off
+  /// immediately when a central path becomes ready. On success it updates
+  /// the cached path RSSI and emits a path-changed event so the Dart side
+  /// (and the app's UI) see the fresh measurement.
+  func peripheral(_ peripheral: CBPeripheral, didReadRSSI RSSI: NSNumber, error: Error?) {
+    let pathId = Self.centralPathId(for: peripheral)
+    guard var path = centralPaths[pathId] else { return }
+    if error != nil {
+      // Don't mark the path as failed on a single read error — RSSI reads
+      // can transiently fail on a busy link. Just log to NSLog and let
+      // the timer fire again on the next cycle.
+      log("readRSSI error for \(pathId): \(error?.localizedDescription ?? "<nil>")")
+      return
+    }
+    path.rssi = RSSI.int64Value
+    centralPaths[pathId] = path
+    emitPath(self.path(forCentralPathId: pathId))
   }
 
   func peripheral(_ peripheral: CBPeripheral, didModifyServices invalidatedServices: [CBService]) {
@@ -1377,7 +1462,6 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
             let peripheral = self.peripheralManager,
             self.advertiseRequest != nil,
             self.advertiseGeneration == generation else { return }
-      self.log("[advertise-health] isAdvertising=\(peripheral.isAdvertising) state=\(self.describe(peripheral.state))")
       guard peripheral.state == .poweredOn else { return }
       if peripheral.isAdvertising {
         self.scheduleAdvertiseHealthCheck(generation: generation)
@@ -1489,7 +1573,7 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
         combined.replaceSubrange(request.offset..<end, with: value)
       }
       if !combined.isEmpty {
-        emitPayload(pathId: pathId, role: .peripheral, value: combined, rssi: -100)
+        emitPayload(pathId: pathId, role: .peripheral, value: combined, rssi: nil)
       }
     }
   }
