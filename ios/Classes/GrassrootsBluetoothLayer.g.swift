@@ -100,8 +100,19 @@ struct BleInitializeOptions {
 
 /// Generated class from Pigeon that represents data sent in messages.
 struct BleAdvertiseRequest {
+  /// The service UUID placed in the advertisement packet — a discovery /
+  /// recognition hint that may rotate over time. It does NOT have to equal the
+  /// GATT service the characteristic lives under (see [gattServiceUuid]).
   var serviceUuid: String
   var characteristicUuid: String
+  /// The GATT service UUID under which the characteristic is registered — the
+  /// data plane a connected central talks to. When null, defaults to
+  /// [serviceUuid] (backward-compatible). Decoupling it from [serviceUuid]
+  /// lets the advertised UUID rotate without rebuilding the GATT service or
+  /// dropping live peripheral links: a later [startAdvertising] that changes
+  /// only [serviceUuid] (same [gattServiceUuid] + [characteristicUuid]) updates
+  /// just the advertisement payload.
+  var gattServiceUuid: String? = nil
   var localName: String? = nil
   var includeDeviceName: Bool
   var bondless: Bool
@@ -111,15 +122,17 @@ struct BleAdvertiseRequest {
   static func fromList(_ list: [Any?]) -> BleAdvertiseRequest? {
     let serviceUuid = list[0] as! String
     let characteristicUuid = list[1] as! String
-    let localName: String? = nilOrValue(list[2])
-    let includeDeviceName = list[3] as! Bool
-    let bondless = list[4] as! Bool
-    let manufacturerId: Int64? = isNullish(list[5]) ? nil : (list[5] is Int64? ? list[5] as! Int64? : Int64(list[5] as! Int32))
-    let manufacturerData: FlutterStandardTypedData? = nilOrValue(list[6])
+    let gattServiceUuid: String? = nilOrValue(list[2])
+    let localName: String? = nilOrValue(list[3])
+    let includeDeviceName = list[4] as! Bool
+    let bondless = list[5] as! Bool
+    let manufacturerId: Int64? = isNullish(list[6]) ? nil : (list[6] is Int64? ? list[6] as! Int64? : Int64(list[6] as! Int32))
+    let manufacturerData: FlutterStandardTypedData? = nilOrValue(list[7])
 
     return BleAdvertiseRequest(
       serviceUuid: serviceUuid,
       characteristicUuid: characteristicUuid,
+      gattServiceUuid: gattServiceUuid,
       localName: localName,
       includeDeviceName: includeDeviceName,
       bondless: bondless,
@@ -131,6 +144,7 @@ struct BleAdvertiseRequest {
     return [
       serviceUuid,
       characteristicUuid,
+      gattServiceUuid,
       localName,
       includeDeviceName,
       bondless,

@@ -54,8 +54,20 @@ class BleInitializeOptions {
 }
 
 class BleAdvertiseRequest {
+  /// The service UUID placed in the advertisement packet — a discovery /
+  /// recognition hint that may rotate over time. It does NOT have to equal the
+  /// GATT service the characteristic lives under (see [gattServiceUuid]).
   String serviceUuid;
   String characteristicUuid;
+
+  /// The GATT service UUID under which the characteristic is registered — the
+  /// data plane a connected central talks to. When null, defaults to
+  /// [serviceUuid] (backward-compatible). Decoupling it from [serviceUuid]
+  /// lets the advertised UUID rotate without rebuilding the GATT service or
+  /// dropping live peripheral links: a later [startAdvertising] that changes
+  /// only [serviceUuid] (same [gattServiceUuid] + [characteristicUuid]) updates
+  /// just the advertisement payload.
+  String? gattServiceUuid;
   String? localName;
   bool includeDeviceName;
   bool bondless;
@@ -65,6 +77,7 @@ class BleAdvertiseRequest {
   BleAdvertiseRequest({
     required this.serviceUuid,
     required this.characteristicUuid,
+    this.gattServiceUuid,
     this.localName,
     this.includeDeviceName = false,
     this.bondless = true,

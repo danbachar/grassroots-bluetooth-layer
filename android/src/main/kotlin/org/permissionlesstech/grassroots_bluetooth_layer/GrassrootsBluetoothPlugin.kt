@@ -72,6 +72,21 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     private var advertisedServiceUuid: UUID? = null
     private var advertisedCharacteristicUuid: UUID? = null
 
+    /**
+     * The UUID the GATT data service is registered under (the data plane a
+     * connected central talks to). Decoupled from [advertisedServiceUuid], which
+     * is the rotating discovery beacon; keeping this stable lets the advertised
+     * UUID rotate without tearing down the GATT server or dropping peripheral
+     * links.
+     */
+    private var gattServiceUuid: UUID? = null
+
+    // Last advertise settings + scan response, retained so a non-destructive
+    // beacon refresh can restart the advertiser without rebuilding them (the
+    // `pending*` copies are consumed once in onServiceAdded).
+    private var lastAdvertiseSettings: AdvertiseSettings? = null
+    private var lastScanResponseData: AdvertiseData? = null
+
     private val centralPaths = ConcurrentHashMap<String, CentralPath>()
     private val peripheralPaths = ConcurrentHashMap<String, PeripheralPath>()
 
@@ -190,13 +205,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         requireAdvertisePermission()
         requireConnectPermission()
 
-        stopAdvertisingInternal(emitEvents = true)
-
         val context = requireContext()
         val manager = bluetoothManager ?: throw unavailable("Bluetooth manager is unavailable")
         val adapter = bluetoothAdapter ?: throw unsupported("Bluetooth adapter is unavailable")
         val serviceUuid = parseUuid(request.serviceUuid)
         val characteristicUuid = parseUuid(request.characteristicUuid)
+        val newGattServiceUuid = parseUuid(request.gattServiceUuid ?: request.serviceUuid)
 
         if (!adapter.isMultipleAdvertisementSupported) {
             throw unsupported("Bluetooth LE advertising is not supported on this device")
@@ -204,6 +218,24 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
         advertiser = adapter.bluetoothLeAdvertiser
             ?: throw unsupported("Bluetooth LE advertiser is unavailable")
+
+        // Non-destructive rotation: when the GATT data service (its UUID and the
+        // characteristic) is unchanged and already registered, only the
+        // advertised beacon changed. Refresh just the advertiser and keep the
+        // GATT server and every live peripheral link intact.
+        if (gattServer != null &&
+            gattServiceUuid == newGattServiceUuid &&
+            advertisedCharacteristicUuid == characteristicUuid
+        ) {
+            logToFlutter(
+                "Advertised serviceUuid changed, GATT service $newGattServiceUuid " +
+                    "unchanged — refreshing advertisement only (no service rebuild)."
+            )
+            refreshAdvertisementOnly(serviceUuid)
+            return
+        }
+
+        stopAdvertisingInternal(emitEvents = true)
 
         // We deliberately do NOT mutate the global Bluetooth adapter name —
         // it's a system-wide setting unrelated to Grassroots identity, and
@@ -243,7 +275,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         )
         characteristic.addDescriptor(cccd)
 
-        val service = BluetoothGattService(serviceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        val service = BluetoothGattService(newGattServiceUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
         service.addCharacteristic(characteristic)
 
         val settings = AdvertiseSettings.Builder()
@@ -297,10 +329,13 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         serverCharacteristic = characteristic
         advertisedServiceUuid = serviceUuid
         advertisedCharacteristicUuid = characteristicUuid
+        gattServiceUuid = newGattServiceUuid
         advertiseCallback = callback
         pendingAdvertiseSettings = settings
         pendingAdvertiseData = advertiseData
         pendingScanResponseData = scanResponseData
+        lastAdvertiseSettings = settings
+        lastScanResponseData = scanResponseData
 
         val added = gattServer?.addService(service) ?: false
         if (!added) {
@@ -308,6 +343,53 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             throw unavailable("Unable to add GATT service")
         }
         logToFlutter("GATT service add requested for $serviceUuid")
+    }
+
+    /**
+     * Restart only the advertiser with a new advertised service UUID, leaving
+     * the open GATT server and every live peripheral link untouched. Used for
+     * non-destructive rotation of the discovery beacon.
+     */
+    private fun refreshAdvertisementOnly(serviceUuid: UUID) {
+        val adv = advertiser ?: return
+        val settings = lastAdvertiseSettings ?: return
+        val scanResponse = lastScanResponseData ?: return
+
+        val advertiseData = AdvertiseData.Builder()
+            .addServiceUuid(ParcelUuid(serviceUuid))
+            .setIncludeTxPowerLevel(false)
+            .setIncludeDeviceName(false)
+            .build()
+
+        advertiseCallback?.let {
+            try {
+                adv.stopAdvertising(it)
+            } catch (_: Exception) {
+            }
+        }
+
+        val callback = object : AdvertiseCallback() {
+            override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
+                logToFlutter("Advertising refreshed for $serviceUuid")
+            }
+
+            override fun onStartFailure(errorCode: Int) {
+                val self = this
+                mainHandler.post {
+                    if (advertiseCallback !== self) return@post
+                    logToFlutter("Advertising refresh failed: ${advertiseFailureMessage(errorCode)}")
+                }
+            }
+        }
+
+        advertisedServiceUuid = serviceUuid
+        advertiseCallback = callback
+        pendingAdvertiseData = advertiseData
+        try {
+            adv.startAdvertising(settings, advertiseData, scanResponse, callback)
+        } catch (illegalArgumentException: IllegalArgumentException) {
+            logToFlutter("Advertising refresh failed: ${illegalArgumentException.message}")
+        }
     }
 
     override fun stopAdvertising() {
@@ -533,7 +615,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             pathId = pathId,
                             address = normalizeAddress(device.address),
                             device = device,
-                            serviceUuid = advertisedServiceUuid,
+                            serviceUuid = gattServiceUuid,
                             characteristicUuid = advertisedCharacteristicUuid,
                             state = BlePathState.CONNECTED,
                             error = statusMessageOrNull(status),
@@ -782,7 +864,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
             mainHandler.post {
-                if (service.uuid != advertisedServiceUuid) {
+                if (service.uuid != gattServiceUuid) {
                     logToFlutter("Ignoring stale GATT service add callback for ${service.uuid}")
                     return@post
                 }
@@ -1512,6 +1594,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         serverCharacteristic = null
         advertisedServiceUuid = null
         advertisedCharacteristicUuid = null
+        gattServiceUuid = null
+        lastAdvertiseSettings = null
+        lastScanResponseData = null
     }
 
     private fun cleanup(emitEvents: Boolean) {
@@ -1552,7 +1637,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             pathId = pathId,
             address = normalizeAddress(device.address),
             device = device,
-            serviceUuid = advertisedServiceUuid,
+            serviceUuid = gattServiceUuid,
             characteristicUuid = advertisedCharacteristicUuid,
             state = BlePathState.CONNECTED,
         ).also {

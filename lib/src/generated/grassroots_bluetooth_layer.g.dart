@@ -89,6 +89,7 @@ class BleAdvertiseRequest {
   BleAdvertiseRequest({
     required this.serviceUuid,
     required this.characteristicUuid,
+    this.gattServiceUuid,
     this.localName,
     required this.includeDeviceName,
     required this.bondless,
@@ -96,9 +97,21 @@ class BleAdvertiseRequest {
     this.manufacturerData,
   });
 
+  /// The service UUID placed in the advertisement packet — a discovery /
+  /// recognition hint that may rotate over time. It does NOT have to equal the
+  /// GATT service the characteristic lives under (see [gattServiceUuid]).
   String serviceUuid;
 
   String characteristicUuid;
+
+  /// The GATT service UUID under which the characteristic is registered — the
+  /// data plane a connected central talks to. When null, defaults to
+  /// [serviceUuid] (backward-compatible). Decoupling it from [serviceUuid]
+  /// lets the advertised UUID rotate without rebuilding the GATT service or
+  /// dropping live peripheral links: a later [startAdvertising] that changes
+  /// only [serviceUuid] (same [gattServiceUuid] + [characteristicUuid]) updates
+  /// just the advertisement payload.
+  String? gattServiceUuid;
 
   String? localName;
 
@@ -114,6 +127,7 @@ class BleAdvertiseRequest {
     return <Object?>[
       serviceUuid,
       characteristicUuid,
+      gattServiceUuid,
       localName,
       includeDeviceName,
       bondless,
@@ -127,11 +141,12 @@ class BleAdvertiseRequest {
     return BleAdvertiseRequest(
       serviceUuid: result[0]! as String,
       characteristicUuid: result[1]! as String,
-      localName: result[2] as String?,
-      includeDeviceName: result[3]! as bool,
-      bondless: result[4]! as bool,
-      manufacturerId: result[5] as int?,
-      manufacturerData: result[6] as Uint8List?,
+      gattServiceUuid: result[2] as String?,
+      localName: result[3] as String?,
+      includeDeviceName: result[4]! as bool,
+      bondless: result[5]! as bool,
+      manufacturerId: result[6] as int?,
+      manufacturerData: result[7] as Uint8List?,
     );
   }
 }

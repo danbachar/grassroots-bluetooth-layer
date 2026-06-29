@@ -76,6 +76,11 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
   private var advertisedCharacteristic: CBMutableCharacteristic?
   private var advertisedServiceUuid: CBUUID?
   private var advertisedCharacteristicUuid: CBUUID?
+  /// The UUID the GATT data service is registered under (the data plane a
+  /// connected central talks to). Decoupled from [advertisedServiceUuid], which
+  /// is the rotating discovery beacon; keeping this stable lets the advertised
+  /// UUID rotate without rebuilding the service or dropping peripheral links.
+  private var gattServiceUuid: CBUUID?
   private var advertiseRequest: BleAdvertiseRequest?
   private var advertisementData: [String: Any]?
   private var advertiseGeneration: UInt64 = 0
@@ -134,15 +139,44 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
 
     advertisedServiceUuid = CBUUID(string: request.serviceUuid)
     advertisedCharacteristicUuid = CBUUID(string: request.characteristicUuid)
+    let newGattServiceUuid = CBUUID(string: request.gattServiceUuid ?? request.serviceUuid)
 
-    log("startAdvertising requested: serviceUuid=\(request.serviceUuid) localName=\(request.localName ?? "<nil>")")
+    log("startAdvertising requested: serviceUuid=\(request.serviceUuid) gattServiceUuid=\(newGattServiceUuid.uuidString) localName=\(request.localName ?? "<nil>")")
     log("peripheralManager.state=\(describe(peripheralManager.state)) authorization=\(describePeripheralAuthorization())")
 
-    if peripheralManager.state == .poweredOn {
-      configurePeripheralService()
-    } else {
+    guard peripheralManager.state == .poweredOn else {
+      gattServiceUuid = newGattServiceUuid
       log("Deferring advertising until peripheral manager is powered on.")
+      return
     }
+
+    // Non-destructive rotation: when the GATT data service (its UUID and the
+    // characteristic) is unchanged and already registered, only the advertised
+    // beacon changed. Refresh just the advertisement payload and keep the GATT
+    // server and every live peripheral link intact.
+    if advertisedCharacteristic != nil, gattServiceUuid == newGattServiceUuid {
+      log("Advertised serviceUuid changed, GATT service \(newGattServiceUuid.uuidString) unchanged — refreshing advertisement only (no service rebuild).")
+      refreshAdvertisementOnly()
+      return
+    }
+
+    // First advertise, or the GATT service itself changed: full (re)build.
+    gattServiceUuid = newGattServiceUuid
+    configurePeripheralService()
+  }
+
+  /// Update only the advertisement payload (the rotating beacon) without
+  /// touching the registered GATT service or live peripheral links.
+  private func refreshAdvertisementOnly() {
+    guard let peripheral = peripheralManager, peripheral.state == .poweredOn else { return }
+    let data = buildAdvertisementData()
+    guard !data.isEmpty else {
+      log("Not refreshing advertisement: advertisement data is empty.")
+      return
+    }
+    advertisementData = data
+    peripheral.stopAdvertising()
+    peripheral.startAdvertising(data)
   }
 
   private func describe(_ state: CBManagerState) -> String {
@@ -188,6 +222,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     advertisedCharacteristic = nil
     advertisedServiceUuid = nil
     advertisedCharacteristicUuid = nil
+    gattServiceUuid = nil
     pendingPeripheralUpdates.removeAll()
     peripheralManager?.stopAdvertising()
     peripheralManager?.removeAllServices()
@@ -346,6 +381,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     advertisedCharacteristic = nil
     advertisedServiceUuid = nil
     advertisedCharacteristicUuid = nil
+    gattServiceUuid = nil
     advertiseRequest = nil
     advertisementData = nil
     scanRequest = nil
@@ -387,7 +423,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
   private func configurePeripheralService() {
     guard let peripheralManager = peripheralManager,
           let request = advertiseRequest,
-          let serviceUuid = advertisedServiceUuid,
+          let gattServiceUuid = gattServiceUuid,
           let characteristicUuid = advertisedCharacteristicUuid else {
       log("configurePeripheralService: missing prerequisites (manager=\(peripheralManager != nil) request=\(advertiseRequest != nil))")
       return
@@ -410,11 +446,11 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       permissions: permissions
     )
 
-    let service = CBMutableService(type: serviceUuid, primary: true)
+    let service = CBMutableService(type: gattServiceUuid, primary: true)
     service.characteristics = [characteristic]
     advertisedCharacteristic = characteristic
 
-    log("Adding GATT service \(serviceUuid.uuidString) characteristic \(characteristicUuid.uuidString)")
+    log("Adding GATT service \(gattServiceUuid.uuidString) characteristic \(characteristicUuid.uuidString) (advertising \(advertisedServiceUuid?.uuidString ?? "<nil>"))")
     peripheralManager.add(service)
   }
 
@@ -1439,7 +1475,7 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
   func peripheralManager(_ peripheral: CBPeripheralManager, didAdd service: CBService, error: Error?) {
     if let error = error {
       log("Failed to add BLE service \(service.uuid.uuidString): \(error.localizedDescription)")
-      if service.uuid == advertisedServiceUuid {
+      if service.uuid == gattServiceUuid {
         advertisementData = nil
         advertisedCharacteristic = nil
         pendingPeripheralUpdates.removeAll()
@@ -1449,7 +1485,7 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
       return
     }
     guard advertiseRequest != nil,
-          service.uuid == advertisedServiceUuid else {
+          service.uuid == gattServiceUuid else {
       log("Ignoring stale didAdd for service \(service.uuid.uuidString)")
       return
     }
@@ -1497,7 +1533,8 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
           peripheral.state == .poweredOn,
           advertiseRequest != nil,
           advertisedCharacteristic != nil,
-          advertisedServiceUuid != nil else {
+          advertisedServiceUuid != nil,
+          gattServiceUuid != nil else {
       configurePeripheralService()
       return
     }

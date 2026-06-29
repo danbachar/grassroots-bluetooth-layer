@@ -87,9 +87,21 @@ class GrassrootsBluetooth {
 
   Future<BleAdapterState> adapterState() => _hostApi.adapterState();
 
+  /// Start (or update) BLE advertising.
+  ///
+  /// [serviceUuid] is the UUID placed in the advertisement packet — a
+  /// discovery/recognition hint that may rotate. [gattServiceUuid] is the GATT
+  /// service the characteristic is registered under (the data plane a connected
+  /// central talks to); when null it defaults to [serviceUuid].
+  ///
+  /// Decoupling them enables non-destructive rotation: calling this again with
+  /// a new [serviceUuid] but the same [gattServiceUuid] + [characteristicUuid]
+  /// updates only the advertisement payload — the GATT server and every live
+  /// peripheral link are preserved.
   Future<void> startAdvertising({
     required String serviceUuid,
     required String characteristicUuid,
+    String? gattServiceUuid,
     String? localName,
     bool includeDeviceName = false,
     bool bondless = true,
@@ -100,6 +112,7 @@ class GrassrootsBluetooth {
       BleAdvertiseRequest(
         serviceUuid: serviceUuid,
         characteristicUuid: characteristicUuid,
+        gattServiceUuid: gattServiceUuid,
         localName: localName,
         includeDeviceName: includeDeviceName,
         bondless: bondless,
