@@ -1603,42 +1603,49 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         receiverRegistered = false
     }
 
+    /**
+     * Pigeon FlutterApi callbacks reply with a `channel-error` [FlutterError]
+     * when no Dart isolate is listening on the channel. This is expected and
+     * transient during hot restart: native scan/GATT callbacks keep firing while
+     * the old isolate is gone and the new one hasn't re-registered its handlers
+     * yet, so a single scan can emit dozens of these per second. Swallow that
+     * specific case (it self-heals once Dart re-attaches) while still surfacing
+     * any genuine callback failure.
+     */
+    private fun handleFlutterCallbackResult(label: String, result: Result<Unit>) {
+        val error = result.exceptionOrNull() ?: return
+        if (error is FlutterError && error.code == "channel-error") return
+        Log.w(TAG, "$label callback failed", error)
+    }
+
     private fun emitAdapterState(state: BleAdapterState) {
         mainHandler.post {
-            flutterApi?.onAdapterStateChanged(state) { result ->
-                result.exceptionOrNull()?.let {
-                    Log.w(TAG, "onAdapterStateChanged callback failed", it)
-                }
+            flutterApi?.onAdapterStateChanged(state) {
+                handleFlutterCallbackResult("onAdapterStateChanged", it)
             }
         }
     }
 
     private fun emitAdvertisement(advertisement: BleAdvertisement) {
         mainHandler.post {
-            flutterApi?.onAdvertisement(advertisement) { result ->
-                result.exceptionOrNull()?.let {
-                    Log.w(TAG, "onAdvertisement callback failed", it)
-                }
+            flutterApi?.onAdvertisement(advertisement) {
+                handleFlutterCallbackResult("onAdvertisement", it)
             }
         }
     }
 
     private fun emitPath(path: BlePath) {
         mainHandler.post {
-            flutterApi?.onPathChanged(path) { result ->
-                result.exceptionOrNull()?.let {
-                    Log.w(TAG, "onPathChanged callback failed", it)
-                }
+            flutterApi?.onPathChanged(path) {
+                handleFlutterCallbackResult("onPathChanged", it)
             }
         }
     }
 
     private fun emitPayload(payload: BlePayload) {
         mainHandler.post {
-            flutterApi?.onPayloadReceived(payload) { result ->
-                result.exceptionOrNull()?.let {
-                    Log.w(TAG, "onPayloadReceived callback failed", it)
-                }
+            flutterApi?.onPayloadReceived(payload) {
+                handleFlutterCallbackResult("onPayloadReceived", it)
             }
         }
     }
@@ -1647,10 +1654,8 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         Log.d(TAG, message)
         if (!verboseLogging) return
         mainHandler.post {
-            flutterApi?.onLog(message) { result ->
-                result.exceptionOrNull()?.let {
-                    Log.w(TAG, "onLog callback failed", it)
-                }
+            flutterApi?.onLog(message) {
+                handleFlutterCallbackResult("onLog", it)
             }
         }
     }
