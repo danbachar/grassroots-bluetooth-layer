@@ -216,13 +216,11 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             throw unsupported("Bluetooth LE advertising is not supported on this device")
         }
 
-        advertiser = adapter.bluetoothLeAdvertiser
-            ?: throw unsupported("Bluetooth LE advertiser is unavailable")
-
         // Non-destructive rotation: when the GATT data service (its UUID and the
         // characteristic) is unchanged and already registered, only the
         // advertised beacon changed. Refresh just the advertiser and keep the
-        // GATT server and every live peripheral link intact.
+        // GATT server and every live peripheral link intact. (The advertiser was
+        // acquired by the prior full advertise and is still live here.)
         if (gattServer != null &&
             gattServiceUuid == newGattServiceUuid &&
             advertisedCharacteristicUuid == characteristicUuid
@@ -236,6 +234,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
 
         stopAdvertisingInternal(emitEvents = true)
+
+        // Acquire the advertiser AFTER stopAdvertisingInternal — it nulls the
+        // `advertiser` field, and onServiceAdded needs it non-null to actually
+        // start advertising once the GATT service is added.
+        advertiser = adapter.bluetoothLeAdvertiser
+            ?: throw unsupported("Bluetooth LE advertiser is unavailable")
 
         // We deliberately do NOT mutate the global Bluetooth adapter name —
         // it's a system-wide setting unrelated to Grassroots identity, and
