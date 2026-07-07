@@ -1,3 +1,15 @@
+## 0.3.0
+
+### Added
+
+- `BleAdvertiseRequest.gattServiceUuid` (optional, defaults to `serviceUuid`): decouples the *advertised* service UUID (a discovery/recognition beacon that may rotate) from the *GATT* service UUID the data characteristic is registered under (the stable data plane a connected central talks to).
+- Non-destructive re-advertise on both platforms: calling `startAdvertising` again with a new `serviceUuid` but the same `gattServiceUuid` + `characteristicUuid` refreshes only the advertisement payload — the GATT server and every live peripheral link are preserved (iOS: re-issue advertisement, no `removeAllServices()`; Android: restart only the advertiser, GATT server stays open). Previously any re-advertise tore down the GATT server and dropped all peripheral paths. Validated on hardware (Pixel/Android + iPhone/iOS): an established dual-role link survives repeated beacon rotations with live messaging throughout.
+- Peripheral `BlePath.serviceUuid` now reports the GATT service UUID (the service the central is actually connected to), not the advertised beacon.
+
+### Fixed
+
+- Android `startAdvertising` acquires the advertiser after the internal teardown (the teardown nulls it); previously a rebuild could log "Advertising start skipped: pending state is missing" and never start advertising.
+
 ## 0.2.0
 
 ### Breaking
