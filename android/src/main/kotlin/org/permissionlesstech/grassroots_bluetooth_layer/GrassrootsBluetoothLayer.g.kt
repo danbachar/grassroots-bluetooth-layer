@@ -385,6 +385,51 @@ data class BlePath (
   }
 }
 
+/**
+ * One live physical connection (ACL / LL link) to a remote device, with the
+ * GATT roles currently riding it. Ground truth from the OS
+ * (BluetoothManager's connected-device lists on Android; tracked
+ * CBPeripheral/CBCentral objects on iOS) — NOT the plugin's path
+ * bookkeeping. One entry per distinct remote address: an address appearing
+ * in both role lists is a single shared link carrying both directions
+ * (over-ACL attach), while a dual-ACL pair shows up as two entries mapped
+ * to the same peer by the app layer.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class BleLinkInfo (
+  /**
+   * Remote address (MAC on Android, CB identifier UUID on iOS) — matches the
+   * address part of the plugin's pathIds.
+   */
+  val address: String,
+  /** We hold a GATT *client* on this link (our central leg). */
+  val clientRole: Boolean,
+  /**
+   * The remote holds a GATT client on our *server* over this link (their
+   * central leg toward us).
+   */
+  val serverRole: Boolean
+
+) {
+  companion object {
+    @Suppress("UNCHECKED_CAST")
+    fun fromList(list: List<Any?>): BleLinkInfo {
+      val address = list[0] as String
+      val clientRole = list[1] as Boolean
+      val serverRole = list[2] as Boolean
+      return BleLinkInfo(address, clientRole, serverRole)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf<Any?>(
+      address,
+      clientRole,
+      serverRole,
+    )
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class BlePayload (
   val pathId: String,
@@ -438,7 +483,7 @@ private object GrassrootsBluetoothLayerHostApiCodec : StandardMessageCodec() {
       }
       132.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          BlePath.fromList(it)
+          BleLinkInfo.fromList(it)
         }
       }
       133.toByte() -> {
@@ -448,10 +493,15 @@ private object GrassrootsBluetoothLayerHostApiCodec : StandardMessageCodec() {
       }
       134.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          BleScanRequest.fromList(it)
+          BlePath.fromList(it)
         }
       }
       135.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          BleScanRequest.fromList(it)
+        }
+      }
+      136.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           BleSendRequest.fromList(it)
         }
@@ -477,7 +527,7 @@ private object GrassrootsBluetoothLayerHostApiCodec : StandardMessageCodec() {
         stream.write(131)
         writeValue(stream, value.toList())
       }
-      is BlePath -> {
+      is BleLinkInfo -> {
         stream.write(132)
         writeValue(stream, value.toList())
       }
@@ -485,12 +535,16 @@ private object GrassrootsBluetoothLayerHostApiCodec : StandardMessageCodec() {
         stream.write(133)
         writeValue(stream, value.toList())
       }
-      is BleScanRequest -> {
+      is BlePath -> {
         stream.write(134)
         writeValue(stream, value.toList())
       }
-      is BleSendRequest -> {
+      is BleScanRequest -> {
         stream.write(135)
+        writeValue(stream, value.toList())
+      }
+      is BleSendRequest -> {
+        stream.write(136)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -511,6 +565,12 @@ interface GrassrootsBluetoothLayerHostApi {
   fun disconnect(request: BleDisconnectRequest)
   fun send(request: BleSendRequest)
   fun paths(): List<BlePath>
+  /**
+   * Ground-truth snapshot of live physical links (see [BleLinkInfo]).
+   * Diagnostic: lets the app distinguish a shared over-ACL pair (one entry,
+   * both roles) from a dual-ACL pair (two entries for the same peer).
+   */
+  fun linkSnapshot(): List<BleLinkInfo>
   fun dispose()
 
   companion object {
@@ -707,6 +767,22 @@ interface GrassrootsBluetoothLayerHostApi {
             var wrapped: List<Any?>
             try {
               wrapped = listOf<Any?>(api.paths())
+            } catch (exception: Throwable) {
+              wrapped = wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.linkSnapshot", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            var wrapped: List<Any?>
+            try {
+              wrapped = listOf<Any?>(api.linkSnapshot())
             } catch (exception: Throwable) {
               wrapped = wrapError(exception)
             }

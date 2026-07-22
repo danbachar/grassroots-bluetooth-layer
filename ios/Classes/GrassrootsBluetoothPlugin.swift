@@ -352,6 +352,35 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     return central + peripheral
   }
 
+  func linkSnapshot() throws -> [BleLinkInfo] {
+    // Ground truth where iOS exposes it: the client side reads the OS's live
+    // CBPeripheral.state (not our bookkeeping enum); the server side has no
+    // OS query, so it reflects the tracked CBCentrals that are not
+    // disconnected/failed. Merged by CB identifier — iOS reports the same
+    // identifier for a device's CBCentral and CBPeripheral objects, so a
+    // shared link shows one entry with both roles (iOS never opens a second
+    // ACL to the same peer).
+    var byAddress: [String: (client: Bool, server: Bool)] = [:]
+    for path in centralPaths.values where path.peripheral.state == .connected {
+      let addr = path.peripheral.identifier.uuidString
+      var entry = byAddress[addr] ?? (false, false)
+      entry.client = true
+      byAddress[addr] = entry
+    }
+    for path in peripheralPaths.values {
+      if path.state == .disconnected || path.state == .failed { continue }
+      let addr = path.central.identifier.uuidString
+      var entry = byAddress[addr] ?? (false, false)
+      entry.server = true
+      byAddress[addr] = entry
+    }
+    return byAddress.keys.sorted().map { addr in
+      let entry = byAddress[addr]!
+      return BleLinkInfo(
+        address: addr, clientRole: entry.client, serverRole: entry.server)
+    }
+  }
+
   func dispose() throws {
     scanTimer?.invalidate()
     scanTimer = nil

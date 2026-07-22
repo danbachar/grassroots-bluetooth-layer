@@ -169,6 +169,13 @@ class GrassrootsBluetooth {
     return result.whereType<BlePath>().toList(growable: false);
   }
 
+  /// Ground-truth snapshot of live physical links (one entry per distinct
+  /// remote address, with the GATT roles riding it). See [BleLinkInfo].
+  Future<List<BleLinkInfo>> linkSnapshot() async {
+    final result = await _hostApi.linkSnapshot();
+    return result.whereType<BleLinkInfo>().toList(growable: false);
+  }
+
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

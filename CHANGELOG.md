@@ -1,5 +1,9 @@
 ## 0.4.0
 
+### Added
+
+- `linkSnapshot()`: OS-level ground truth of live physical BLE links. Returns one `BleLinkInfo` per distinct remote address with the GATT roles riding it (`clientRole`/`serverRole`). Android reads `BluetoothManager`'s GATT + GATT_SERVER connected-device lists merged by address; iOS reads live `CBPeripheral` state plus tracked centrals merged by identifier. Lets consumers distinguish a shared over-ACL pair (one entry, both roles) from a dual-ACL pair (two entries for one peer).
+
 ### Fixed
 
 - Android 8.x fatal binder NPE in `BluetoothGattServer.sendResponse` when responding to a GATT client request after the peer dropped the link (the respond-after-disconnect race). All GATT server response sites now go through a crash-proof wrapper; a response to a departed peer is logged and discarded instead of killing the app.

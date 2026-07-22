@@ -5,6 +5,7 @@ export 'src/generated/grassroots_bluetooth_layer.g.dart'
     show
         BleAdapterState,
         BleAdvertisement,
+        BleLinkInfo,
         BlePath,
         BlePathState,
         BlePayload,

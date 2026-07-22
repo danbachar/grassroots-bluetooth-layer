@@ -577,6 +577,32 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         return central + peripheral
     }
 
+    override fun linkSnapshot(): List<BleLinkInfo> {
+        // Ground truth from the OS, not our path bookkeeping: the stack's
+        // per-profile connected-device lists. One entry per distinct remote
+        // address = one live ACL. An address in BOTH lists is a single shared
+        // link carrying both GATT directions (over-ACL); a dual-ACL pair
+        // surfaces as two different addresses that the app maps to one peer.
+        val manager = bluetoothManager ?: return emptyList()
+        val clientAddrs = try {
+            manager.getConnectedDevices(BluetoothProfile.GATT).map { it.address }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val serverAddrs = try {
+            manager.getConnectedDevices(BluetoothProfile.GATT_SERVER).map { it.address }
+        } catch (e: Exception) {
+            emptyList()
+        }
+        return (clientAddrs.toSet() + serverAddrs.toSet()).sorted().map { addr ->
+            BleLinkInfo(
+                address = addr,
+                clientRole = clientAddrs.contains(addr),
+                serverRole = serverAddrs.contains(addr),
+            )
+        }
+    }
+
     override fun dispose() {
         cleanup(emitEvents = true)
     }

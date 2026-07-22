@@ -381,6 +381,46 @@ struct BlePath {
   }
 }
 
+/// One live physical connection (ACL / LL link) to a remote device, with the
+/// GATT roles currently riding it. Ground truth from the OS
+/// (BluetoothManager's connected-device lists on Android; tracked
+/// CBPeripheral/CBCentral objects on iOS) — NOT the plugin's path
+/// bookkeeping. One entry per distinct remote address: an address appearing
+/// in both role lists is a single shared link carrying both directions
+/// (over-ACL attach), while a dual-ACL pair shows up as two entries mapped
+/// to the same peer by the app layer.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct BleLinkInfo {
+  /// Remote address (MAC on Android, CB identifier UUID on iOS) — matches the
+  /// address part of the plugin's pathIds.
+  var address: String
+  /// We hold a GATT *client* on this link (our central leg).
+  var clientRole: Bool
+  /// The remote holds a GATT client on our *server* over this link (their
+  /// central leg toward us).
+  var serverRole: Bool
+
+  static func fromList(_ list: [Any?]) -> BleLinkInfo? {
+    let address = list[0] as! String
+    let clientRole = list[1] as! Bool
+    let serverRole = list[2] as! Bool
+
+    return BleLinkInfo(
+      address: address,
+      clientRole: clientRole,
+      serverRole: serverRole
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      address,
+      clientRole,
+      serverRole,
+    ]
+  }
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct BlePayload {
   var pathId: String
@@ -422,12 +462,14 @@ private class GrassrootsBluetoothLayerHostApiCodecReader: FlutterStandardReader 
     case 131:
       return BleInitializeOptions.fromList(self.readValue() as! [Any?])
     case 132:
-      return BlePath.fromList(self.readValue() as! [Any?])
+      return BleLinkInfo.fromList(self.readValue() as! [Any?])
     case 133:
       return BlePath.fromList(self.readValue() as! [Any?])
     case 134:
-      return BleScanRequest.fromList(self.readValue() as! [Any?])
+      return BlePath.fromList(self.readValue() as! [Any?])
     case 135:
+      return BleScanRequest.fromList(self.readValue() as! [Any?])
+    case 136:
       return BleSendRequest.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -449,17 +491,20 @@ private class GrassrootsBluetoothLayerHostApiCodecWriter: FlutterStandardWriter 
     } else if let value = value as? BleInitializeOptions {
       super.writeByte(131)
       super.writeValue(value.toList())
-    } else if let value = value as? BlePath {
+    } else if let value = value as? BleLinkInfo {
       super.writeByte(132)
       super.writeValue(value.toList())
     } else if let value = value as? BlePath {
       super.writeByte(133)
       super.writeValue(value.toList())
-    } else if let value = value as? BleScanRequest {
+    } else if let value = value as? BlePath {
       super.writeByte(134)
       super.writeValue(value.toList())
-    } else if let value = value as? BleSendRequest {
+    } else if let value = value as? BleScanRequest {
       super.writeByte(135)
+      super.writeValue(value.toList())
+    } else if let value = value as? BleSendRequest {
+      super.writeByte(136)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -494,6 +539,10 @@ protocol GrassrootsBluetoothLayerHostApi {
   func disconnect(request: BleDisconnectRequest) throws
   func send(request: BleSendRequest) throws
   func paths() throws -> [BlePath]
+  /// Ground-truth snapshot of live physical links (see [BleLinkInfo]).
+  /// Diagnostic: lets the app distinguish a shared over-ACL pair (one entry,
+  /// both roles) from a dual-ACL pair (two entries for the same peer).
+  func linkSnapshot() throws -> [BleLinkInfo]
   func dispose() throws
 }
 
@@ -657,6 +706,22 @@ class GrassrootsBluetoothLayerHostApiSetup {
       }
     } else {
       pathsChannel.setMessageHandler(nil)
+    }
+    /// Ground-truth snapshot of live physical links (see [BleLinkInfo]).
+    /// Diagnostic: lets the app distinguish a shared over-ACL pair (one entry,
+    /// both roles) from a dual-ACL pair (two entries for the same peer).
+    let linkSnapshotChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.linkSnapshot", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      linkSnapshotChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.linkSnapshot()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      linkSnapshotChannel.setMessageHandler(nil)
     }
     let disposeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.dispose", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {

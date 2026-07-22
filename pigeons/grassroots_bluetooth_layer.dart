@@ -196,6 +196,33 @@ class BlePath {
   });
 }
 
+/// One live physical connection (ACL / LL link) to a remote device, with the
+/// GATT roles currently riding it. Ground truth from the OS
+/// (BluetoothManager's connected-device lists on Android; tracked
+/// CBPeripheral/CBCentral objects on iOS) — NOT the plugin's path
+/// bookkeeping. One entry per distinct remote address: an address appearing
+/// in both role lists is a single shared link carrying both directions
+/// (over-ACL attach), while a dual-ACL pair shows up as two entries mapped
+/// to the same peer by the app layer.
+class BleLinkInfo {
+  /// Remote address (MAC on Android, CB identifier UUID on iOS) — matches the
+  /// address part of the plugin's pathIds.
+  String address;
+
+  /// We hold a GATT *client* on this link (our central leg).
+  bool clientRole;
+
+  /// The remote holds a GATT client on our *server* over this link (their
+  /// central leg toward us).
+  bool serverRole;
+
+  BleLinkInfo({
+    required this.address,
+    this.clientRole = false,
+    this.serverRole = false,
+  });
+}
+
 class BlePayload {
   String pathId;
   BleRole role;
@@ -233,6 +260,11 @@ abstract class GrassrootsBluetoothLayerHostApi {
   void send(BleSendRequest request);
 
   List<BlePath> paths();
+
+  /// Ground-truth snapshot of live physical links (see [BleLinkInfo]).
+  /// Diagnostic: lets the app distinguish a shared over-ACL pair (one entry,
+  /// both roles) from a dual-ACL pair (two entries for the same peer).
+  List<BleLinkInfo> linkSnapshot();
 
   void dispose();
 }
