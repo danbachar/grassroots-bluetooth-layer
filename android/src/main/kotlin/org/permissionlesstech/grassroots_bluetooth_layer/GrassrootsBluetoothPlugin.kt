@@ -603,6 +603,28 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
     }
 
+    /// GATT-server response that survives the respond-after-disconnect race.
+    /// The peer can drop the link between the request callback and our
+    /// (main-handler-posted) response; on modern Android sendResponse then
+    /// just returns false, but Android 8.x's Bluetooth process throws an NPE
+    /// that propagates back through the binder and would kill the whole app.
+    /// The race is unavoidable, so the response must be crash-proof.
+    private fun safeSendResponse(
+        device: BluetoothDevice,
+        requestId: Int,
+        status: Int,
+        offset: Int,
+        value: ByteArray,
+    ) {
+        try {
+            gattServer?.sendResponse(device, requestId, status, offset, value)
+        } catch (e: Exception) {
+            logToFlutter(
+                "sendResponse to ${device.address} failed (peer likely gone): $e",
+            )
+        }
+    }
+
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             mainHandler.post {
@@ -673,7 +695,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         ) {
             if (characteristic.uuid != advertisedCharacteristicUuid) {
                 mainHandler.post {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_FAILURE,
@@ -686,7 +708,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             val value = characteristic.value ?: ByteArray(0)
             mainHandler.post {
                 if (offset > value.size) {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_FAILURE,
@@ -695,7 +717,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     )
                     return@post
                 }
-                gattServer?.sendResponse(
+                safeSendResponse(
                     device,
                     requestId,
                     BluetoothGatt.GATT_SUCCESS,
@@ -718,7 +740,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             mainHandler.post {
                 if (charUuid != advertisedCharacteristicUuid) {
                     if (responseNeeded) {
-                        gattServer?.sendResponse(
+                        safeSendResponse(
                             device,
                             requestId,
                             BluetoothGatt.GATT_FAILURE,
@@ -735,7 +757,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             "preparedWrite=$preparedWrite offset=$offset",
                     )
                     if (responseNeeded) {
-                        gattServer?.sendResponse(
+                        safeSendResponse(
                             device,
                             requestId,
                             BluetoothGatt.GATT_FAILURE,
@@ -747,7 +769,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 }
 
                 if (responseNeeded) {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_SUCCESS,
@@ -778,7 +800,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             val descriptorUuid = descriptor.uuid
             mainHandler.post {
                 if (descriptorUuid != CCCD_UUID) {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_FAILURE,
@@ -794,7 +816,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
                 }
                 if (offset > value.size) {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_FAILURE,
@@ -804,7 +826,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     return@post
                 }
 
-                gattServer?.sendResponse(
+                safeSendResponse(
                     device,
                     requestId,
                     BluetoothGatt.GATT_SUCCESS,
@@ -827,7 +849,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             mainHandler.post {
                 if (descriptorUuid != CCCD_UUID || preparedWrite || offset != 0) {
                     if (responseNeeded) {
-                        gattServer?.sendResponse(
+                        safeSendResponse(
                             device,
                             requestId,
                             BluetoothGatt.GATT_FAILURE,
@@ -849,7 +871,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 emitPath(path.toBlePath())
 
                 if (responseNeeded) {
-                    gattServer?.sendResponse(
+                    safeSendResponse(
                         device,
                         requestId,
                         BluetoothGatt.GATT_SUCCESS,
