@@ -454,41 +454,22 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     peripheralManager.add(service)
   }
 
-  /// Fixed local name advertised by every iOS Grassroots peripheral.
-  ///
-  /// This is a platform marker, not an identity: peers that see it know the
-  /// advertiser is an iOS device and yield the first central dial to it,
-  /// because an iOS central can only open the FIRST ACL link of a pair — an
-  /// iOS-initiated second (reverse) link never reaches `didConnect`. Identity
-  /// still travels exclusively in the signed post-connection ANNOUNCE.
-  ///
-  /// Must stay in sync with `grassrootsIosLocalName` in the package's Dart
-  /// facade (lib/src/grassroots_bluetooth_layer.dart). Keep it ≤ 8 ASCII
-  /// chars: the 128-bit service UUID consumes 18 of the 28 advertise-packet
-  /// bytes, and CoreBluetooth only guarantees ~10 bytes for a local name
-  /// (scan response) before silently truncating it.
-  private static let grassrootsIosLocalName = "grs-ios"
-
   private func buildAdvertisementData() -> [String: Any] {
     guard let request = advertiseRequest,
           let serviceUuid = advertisedServiceUuid else { return [:] }
 
     // The 128-bit service UUID stays in the primary advertise packet (18 of
     // 28 bytes) so external scanners (Android, generic BLE explorers) can
-    // discover us; CoreBluetooth carries the short fixed local name in the
-    // scan response. The name is the iOS platform marker described on
-    // `grassrootsIosLocalName` — NOT the caller-supplied nickname, which is
-    // cosmetic, user-controlled, and long enough to risk truncation.
-    // In the background iOS drops the name and moves the UUID to the
-    // overflow area; peers then simply can't detect us as iOS and fall back
-    // to their platform-neutral dial arbitration.
-    let data: [String: Any] = [
+    // discover us. We no longer advertise a fixed iOS platform marker: peers
+    // do their dial-order arbitration without knowing our platform up front.
+    // The caller-supplied local name, if any, rides in the scan response — it
+    // is cosmetic (identity travels in the signed post-connection ANNOUNCE)
+    // and a long name risks CoreBluetooth truncating it to ~10 bytes.
+    var data: [String: Any] = [
       CBAdvertisementDataServiceUUIDsKey: [serviceUuid],
-      CBAdvertisementDataLocalNameKey: Self.grassrootsIosLocalName,
     ]
-
     if let localName = request.localName, !localName.isEmpty {
-      log("Substituting localName='\(localName)' with iOS platform marker '\(Self.grassrootsIosLocalName)' — peers use it to yield the first central dial to iOS.")
+      data[CBAdvertisementDataLocalNameKey] = localName
     }
     if request.manufacturerData != nil || request.manufacturerId != nil {
       log("iOS peripheral advertising does not support manufacturer data via CoreBluetooth; ignored.")

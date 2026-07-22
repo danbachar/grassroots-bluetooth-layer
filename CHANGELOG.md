@@ -1,3 +1,9 @@
+## 0.4.0
+
+### Removed
+
+- The fixed `grs-ios` iOS platform marker. iOS peripherals no longer substitute the caller-supplied `localName` with `grs-ios` in the scan response — they advertise the caller's `localName` if one is given, otherwise no local name at all. The `grassrootsIosLocalName` constant (exported from both `grassroots_bluetooth_layer` and `grassroots_bluetooth_layer_testing`) is gone. This drops the pre-connection iOS-detection hint: consumers must now do dial-order arbitration without knowing a peer's platform until the signed post-connection ANNOUNCE identifies it. **Breaking**: code importing `grassrootsIosLocalName` will no longer compile.
+
 ## 0.3.0
 
 ### Added

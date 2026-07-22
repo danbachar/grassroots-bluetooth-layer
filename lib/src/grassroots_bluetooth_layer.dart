@@ -5,22 +5,6 @@ import 'package:meta/meta.dart';
 
 import 'generated/grassroots_bluetooth_layer.g.dart';
 
-/// Fixed local name advertised by every iOS Grassroots peripheral (carried in
-/// the scan response next to the 128-bit service UUID; surfaced to scanners
-/// as [BleAdvertisement.advertisedName]).
-///
-/// This is a platform marker, not an identity: an advertisement carrying it
-/// comes from an iOS device, whose central role can only open the FIRST ACL
-/// link of a pair. Consumers use it to yield the first central dial to iOS;
-/// the reverse (second) leg is then opened by the non-iOS side, which iOS
-/// accepts. iOS drops the local name while backgrounded, so the absence of
-/// the marker proves nothing — dial arbitration must degrade gracefully
-/// without it.
-///
-/// Must stay in sync with `grassrootsIosLocalName` in
-/// ios/Classes/GrassrootsBluetoothPlugin.swift.
-const String grassrootsIosLocalName = 'grs-ios';
-
 /// Thin Dart facade over the native unified BLE state machine.
 ///
 /// The package treats platform IDs as ephemeral path handles. Applications
