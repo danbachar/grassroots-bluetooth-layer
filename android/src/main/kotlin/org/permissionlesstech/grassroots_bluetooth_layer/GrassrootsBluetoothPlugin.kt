@@ -42,6 +42,11 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val TAG = "GrassrootsBluetoothPlugin"
 private const val DEFAULT_ATT_MTU = 23
+
+/// The largest ATT MTU the specification allows. A central asks for this and
+/// the two controllers settle on whatever they can both carry, so a pair ends
+/// at its own ceiling rather than at a number this library picked for it.
+private const val MAX_ATT_MTU = 517
 private const val RSSI_POLL_INTERVAL_MS = 10_000L
 private val CCCD_UUID: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
 
@@ -101,6 +106,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         var state: BlePathState = BlePathState.DISCOVERED,
         var rssi: Int? = null,
         var mtu: Int = DEFAULT_ATT_MTU,
+        /// The MTU to ASK for on this link, kept apart from [mtu], which holds
+        /// only what a negotiation has actually agreed.
+        var requestedMtu: Int = MAX_ATT_MTU,
         var canSend: Boolean = false,
         var subscribeRequested: Boolean = true,
         var subscriptionReady: Boolean = false,
@@ -561,10 +569,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             mainHandler.postDelayed(path.connectTimeoutRunnable!!, request.timeoutMs)
         }
 
+        // Record what to ask for. `mtu` stays at the default until a
+        // negotiation answers: writes are sized from it, and a value we have
+        // merely requested is not one the link has agreed to carry.
         val requestedMtu = request.androidMtu?.toInt()
-        if (requestedMtu != null && requestedMtu > DEFAULT_ATT_MTU) {
-            path.mtu = requestedMtu.coerceIn(DEFAULT_ATT_MTU, 517)
-        }
+        path.requestedMtu =
+            (requestedMtu ?: MAX_ATT_MTU).coerceIn(DEFAULT_ATT_MTU + 1, MAX_ATT_MTU)
 
         return path.toBlePath()
     }
@@ -1019,12 +1029,21 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             path.canSend = false
                             emitPath(path.toBlePath())
 
-                            val requestedMtu = path.mtu
-                            if (requestedMtu > DEFAULT_ATT_MTU) {
-                                enqueueGattOp(pathId, GattOp.RequestMtu(requestedMtu))
-                            } else {
-                                enqueueGattOp(pathId, GattOp.DiscoverServices)
-                            }
+                            // Negotiate the MTU as the first thing on a new
+                            // link, unconditionally and before discovery.
+                            //
+                            // This was gated on `path.mtu` already exceeding
+                            // the default — the same field a negotiated value
+                            // lands in — so a path arriving here at the default
+                            // skipped the exchange and went straight to
+                            // discovery. Nothing raised it afterwards: the
+                            // central kept the default, and the peer's GATT
+                            // server was never called back, because no
+                            // negotiation had happened at all. Both ends were
+                            // left with 20 usable bytes, under the header of a
+                            // single packet, on a link that looked healthy and
+                            // could carry nothing.
+                            enqueueGattOp(pathId, GattOp.RequestMtu(path.requestedMtu))
                         }
                         newState == BluetoothProfile.STATE_DISCONNECTED -> {
                             val previousState = path.state
