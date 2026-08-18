@@ -1036,6 +1036,24 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         return object : BluetoothGattCallback() {
             override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
                 mainHandler.post {
+                    // Release the controller's slot for this connection before
+                    // anything else can return early.
+                    //
+                    // disconnect() tears the link down; only close() gives back
+                    // the client interface and its transport control block. The
+                    // stack has a small, fixed number of those — far smaller on
+                    // older controllers — and once they are gone every
+                    // connectGatt comes back as the generic status 133, which
+                    // produces more of these callbacks and so exhausts them
+                    // faster. A callback for a path we no longer track is
+                    // exactly the case that must still close: the object is
+                    // ours either way, and nothing else will ever release it.
+                    if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                        try {
+                            gatt.close()
+                        } catch (_: Exception) {
+                        }
+                    }
                     val path = centralPaths[pathId] ?: return@post
                     when {
                         newState == BluetoothProfile.STATE_CONNECTED &&
@@ -1100,10 +1118,6 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             path.pendingOps.clear()
                             path.inFlightOp = null
                             emitPath(path.toBlePath())
-                            try {
-                                gatt.close()
-                            } catch (_: Exception) {
-                            }
                             if (path.forgetOnDisconnect) {
                                 centralPaths.remove(pathId)
                             }
@@ -1457,6 +1471,10 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             path.state = BlePathState.DISCONNECTED
             emitPath(path.toBlePath())
             if (request.forget) {
+                // Close whatever this path still holds before losing the only
+                // reference to it: once the entry is gone nothing can give the
+                // controller its slot back.
+                safeDisconnectAndClose(path)
                 centralPaths.remove(request.pathId)
             }
         }
