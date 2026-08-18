@@ -43,6 +43,11 @@ android {
     }
 
     defaultConfig {
-        minSdkVersion 21
+        // 22 is the floor because a peripheral's only direct report of the
+        // negotiated ATT MTU is BluetoothGattServerCallback.onMtuChanged,
+        // which does not exist below it. On 21 that side has no way at all to
+        // learn the MTU, and a path left on the 23-byte default cannot carry
+        // even one packet header.
+        minSdkVersion 22
     }
 }
