@@ -140,6 +140,20 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         data class RequestMtu(val mtu: Int) : GattOp()
     }
 
+    /**
+     * An ATT MTU reported for a peripheral link whose path does not exist yet.
+     *
+     * The server learns the MTU from the remote central's exchange, which is
+     * not ordered against our own STATE_CONNECTED callback. When the MTU
+     * arrives first the path is not in [peripheralPaths] yet, and dropping the
+     * value there leaves that link on the 23-byte ATT default for its whole
+     * lifetime -- every write large enough to matter is then refused by the
+     * caller, so the link is up and carries nothing. Entries are keyed by path
+     * id and cleared on disconnect, so a value can never be applied to a later
+     * connection that renegotiated its own.
+     */
+    private val pendingPeripheralMtu = mutableMapOf<String, Int>()
+
     private data class PeripheralPath(
         val pathId: String,
         val address: String,
@@ -663,6 +677,20 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                                 "addr=${device.address} previousState=$previousState " +
                                 "newState=CONNECTED ${decodeGattStatus(status)}"
                         )
+                        val existing = peripheralPaths[pathId]
+                        // A repeated CONNECTED on a link that is already up must
+                        // not reset the negotiated MTU: it is exchanged once per
+                        // connection and never again, so a fresh object here
+                        // pins the link at the ATT default for good. A path that
+                        // was DISCONNECTED is a new connection, which does
+                        // renegotiate, and starts at the default correctly.
+                        val carriedMtu = if (existing != null &&
+                            existing.state != BlePathState.DISCONNECTED
+                        ) {
+                            existing.mtu
+                        } else {
+                            pendingPeripheralMtu.remove(pathId) ?: DEFAULT_ATT_MTU
+                        }
                         val path = PeripheralPath(
                             pathId = pathId,
                             address = normalizeAddress(device.address),
@@ -670,6 +698,8 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             serviceUuid = gattServiceUuid,
                             characteristicUuid = advertisedCharacteristicUuid,
                             state = BlePathState.CONNECTED,
+                            mtu = carriedMtu,
+                            subscribed = existing?.subscribed ?: false,
                             error = statusMessageOrNull(status),
                         )
                         peripheralPaths[pathId] = path
@@ -683,6 +713,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                                 "subscribed=${path?.subscribed} " +
                                 "newState=DISCONNECTED ${decodeGattStatus(status)}"
                         )
+                        // The next connection negotiates its own MTU, so
+                        // nothing learned about this one may outlive it.
+                        pendingPeripheralMtu.remove(pathId)
                         if (path != null) {
                             path.state = BlePathState.DISCONNECTED
                             path.canSend = false
@@ -707,8 +740,22 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
         override fun onMtuChanged(device: BluetoothDevice, mtu: Int) {
             mainHandler.post {
-                val path = peripheralPaths[peripheralPathId(device.address)] ?: return@post
+                val pathId = peripheralPathId(device.address)
+                val path = peripheralPaths[pathId]
+                if (path == null) {
+                    // Ahead of our own CONNECTED callback: hold it until the
+                    // path exists rather than losing the only report we get.
+                    pendingPeripheralMtu[pathId] = mtu
+                    logToFlutter(
+                        "BLE peripheral onMtuChanged before path exists: " +
+                            "pathId=$pathId mtu=$mtu (held)"
+                    )
+                    return@post
+                }
                 path.mtu = mtu
+                logToFlutter(
+                    "BLE peripheral onMtuChanged: pathId=$pathId mtu=$mtu"
+                )
                 emitPath(path.toBlePath())
             }
         }
@@ -1692,6 +1739,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             serviceUuid = gattServiceUuid,
             characteristicUuid = advertisedCharacteristicUuid,
             state = BlePathState.CONNECTED,
+            mtu = pendingPeripheralMtu.remove(pathId) ?: DEFAULT_ATT_MTU,
         ).also {
             peripheralPaths[pathId] = it
             emitPath(it.toBlePath())
