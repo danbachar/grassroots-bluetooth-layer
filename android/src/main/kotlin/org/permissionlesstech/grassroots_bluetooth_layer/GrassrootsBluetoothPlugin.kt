@@ -841,6 +841,29 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     return@post
                 }
 
+                // A write that arrived is a write the link carried, so the
+                // ATT MTU is at least its length plus the 3-byte header. This
+                // is the peripheral's own evidence of the negotiated value,
+                // and it needs one: only the central is told the MTU directly
+                // — it asks and is called back — while the server callback
+                // that would tell this side is not always delivered. Left on
+                // the 23-byte default a path has 20 usable bytes, under the
+                // header of a single packet, so it refuses everything it
+                // tries to send while the link looks healthy. Raising only,
+                // and only to a size this link has demonstrably carried,
+                // cannot overstate what it can take.
+                val provenMtu = value.size + 3
+                peripheralPaths[peripheralPathId(device.address)]?.let { p ->
+                    if (provenMtu > p.mtu) {
+                        logToFlutter(
+                            "BLE peripheral mtu raised by an inbound write: " +
+                                "pathId=${p.pathId} ${p.mtu} -> $provenMtu"
+                        )
+                        p.mtu = provenMtu
+                        emitPath(p.toBlePath())
+                    }
+                }
+
                 if (responseNeeded) {
                     safeSendResponse(
                         device,
