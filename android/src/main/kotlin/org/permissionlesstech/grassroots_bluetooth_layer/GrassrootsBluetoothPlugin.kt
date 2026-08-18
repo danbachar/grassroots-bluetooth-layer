@@ -851,6 +851,30 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     return@post
                 }
 
+                // An ATT write PDU is one opcode byte, two handle bytes and
+                // the value, and the whole PDU has to fit the MTU — so a value
+                // of this length having arrived proves the link carries at
+                // least value.size + 3. (The send side subtracts those same
+                // three bytes; they are added here because what is known is
+                // the value, not the PDU.) The peripheral needs that evidence:
+                // its only direct report is the GATT server's MTU callback,
+                // which the OS does not always deliver, and a path left on the
+                // 23-byte default has 20 usable bytes — under the header of a
+                // single packet — so it refuses everything it sends while the
+                // link reports healthy. Raise only: where the callback did
+                // speak, the value it gave is the true one.
+                val provenMtu = value.size + 3
+                peripheralPaths[peripheralPathId(device.address)]?.let { known ->
+                    if (provenMtu > known.mtu) {
+                        logToFlutter(
+                            "BLE peripheral mtu raised by an inbound write: " +
+                                "pathId=${known.pathId} ${known.mtu} -> $provenMtu",
+                        )
+                        known.mtu = provenMtu
+                        emitPath(known.toBlePath())
+                    }
+                }
+
                 if (responseNeeded) {
                     safeSendResponse(
                         device,
