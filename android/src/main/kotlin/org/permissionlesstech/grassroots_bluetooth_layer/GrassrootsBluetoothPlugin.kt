@@ -563,7 +563,6 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 val current = centralPaths[pathId] ?: return@Runnable
                 if (current.state != BlePathState.READY) {
                     failCentralPath(pathId, "Connection timed out after ${request.timeoutMs}ms")
-                    safeDisconnectAndClose(current)
                 }
             }
             mainHandler.postDelayed(path.connectTimeoutRunnable!!, request.timeoutMs)
@@ -1406,6 +1405,13 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         path.canSend = false
         path.subscriptionReady = false
         path.error = message
+        // A path that failed AFTER the link came up -- discovery, the
+        // characteristic lookup, the CCCD write -- is still holding a
+        // connection, and the stack has a small fixed number of those. Nothing
+        // else releases it: the peer is not going to drop a link it considers
+        // healthy, and the DISCONNECTED callback that closes elsewhere never
+        // arrives. Release it here, where every failure converges.
+        safeDisconnectAndClose(path)
         emitPath(path.toBlePath())
         logToFlutter("Path $pathId failed: $message")
     }
