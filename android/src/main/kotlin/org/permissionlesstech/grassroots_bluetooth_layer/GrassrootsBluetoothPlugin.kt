@@ -99,6 +99,14 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     private val centralPaths = ConcurrentHashMap<String, CentralPath>()
     private val peripheralPaths = ConcurrentHashMap<String, PeripheralPath>()
 
+    companion object {
+        // How long a fresh link keeps the HIGH connection interval: long
+        // enough for MTU + discovery + subscribe + ANNOUNCE + the three
+        // Noise flights, short enough that a long-lived link spends its
+        // life at a balanced interval.
+        private const val PRIORITY_WINDOW_MS = 12_000L
+    }
+
     private data class CentralPath(
         val pathId: String,
         val address: String,
@@ -117,6 +125,12 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         var subscribeRequested: Boolean = true,
         var subscriptionReady: Boolean = false,
         var connectTimeoutRunnable: Runnable? = null,
+        // One shot per dial: a service miss clears the peer's cached
+        // attribute table and re-discovers once before the path is failed.
+        var refreshAttempted: Boolean = false,
+        // Returns the link to a balanced interval once establishment has had
+        // its window; held so teardown can cancel it.
+        var priorityDropRunnable: Runnable? = null,
         var rssiPollRunnable: Runnable? = null,
         var forgetOnDisconnect: Boolean = false,
         var error: String? = null,
@@ -1198,10 +1212,27 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             // left with 20 usable bytes, under the header of a
                             // single packet, on a link that looked healthy and
                             // could carry nothing.
-                            // Before anything reads this peer's services:
-                            // discovery must see what the peer has now, not
-                            // what it had under a previous rotation slot.
-                            clearGattCache(gatt)
+                            // The whole establishment ladder -- MTU,
+                            // discovery, subscribe, then the ANNOUNCE and
+                            // Noise flights above -- is a chain of round
+                            // trips, one connection event each. At the
+                            // default interval that is tens of milliseconds
+                            // per step; at HIGH it is ~11-15 ms. Request it
+                            // for the establishment window and hand back a
+                            // balanced interval afterwards, when the link is
+                            // carrying ordinary traffic.
+                            gatt.requestConnectionPriority(
+                                BluetoothGatt.CONNECTION_PRIORITY_HIGH)
+                            val dropPriority = Runnable {
+                                val live = centralPaths[pathId]
+                                if (live?.gatt === gatt) {
+                                    gatt.requestConnectionPriority(
+                                        BluetoothGatt.CONNECTION_PRIORITY_BALANCED)
+                                }
+                            }
+                            path.priorityDropRunnable = dropPriority
+                            mainHandler.postDelayed(
+                                dropPriority, PRIORITY_WINDOW_MS)
                             enqueueGattOp(pathId, GattOp.RequestMtu(path.requestedMtu))
                         }
                         newState == BluetoothProfile.STATE_DISCONNECTED -> {
@@ -1281,6 +1312,21 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     }
 
                     if (service == null || characteristic == null) {
+                        // A miss on a live link means the cached attribute
+                        // table no longer matches the peer -- its service
+                        // UUID moved (rotation, or a reinstall that changed
+                        // the identity). Clearing the cache costs a full
+                        // re-discovery, so it is spent only here, where the
+                        // table has proven stale, not on every connect.
+                        if (!path.refreshAttempted) {
+                            path.refreshAttempted = true
+                            logToFlutter(
+                                "Service not in cached table for $pathId -- " +
+                                    "clearing the cache and rediscovering")
+                            clearGattCache(gatt)
+                            enqueueGattOp(pathId, GattOp.DiscoverServices)
+                            return@post
+                        }
                         failCentralPath(pathId, "Required GATT service or characteristic not found")
                         gatt.disconnect()
                         return@post
@@ -1938,6 +1984,8 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     private fun safeDisconnectAndClose(path: CentralPath) {
+        path.priorityDropRunnable?.let { mainHandler.removeCallbacks(it) }
+        path.priorityDropRunnable = null
         stopCentralRssiPoll(path)
         val gatt = path.gatt ?: return
         try {
