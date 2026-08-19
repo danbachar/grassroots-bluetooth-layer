@@ -72,6 +72,60 @@ enum BleWriteMode: Int {
   case withResponse = 1
 }
 
+/// Why the controller refused to start advertising, in terms of what the
+/// caller can do about it.
+enum BleAdvertiseFailure: Int {
+  /// The request is sound but the controller would not take it now — another
+  /// app holds the advertising slots, or the stack faulted. A later
+  /// `startAdvertising` with the same arguments can succeed.
+  case transient = 0
+  /// The request cannot succeed as written — the advertisement exceeds the
+  /// payload budget, or the controller cannot advertise at all. Repeating the
+  /// same `startAdvertising` changes nothing; the arguments have to change.
+  case terminal = 1
+}
+
+/// Whether this device is broadcasting its advertisement.
+///
+/// A device that is not advertising is undiscoverable: peers cannot see it,
+/// no inbound peripheral leg can form, and nothing about the scan side says
+/// so — the radio keeps finding peers while no peer can find it. This state
+/// is reported so the application can record it rather than infer it.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct BleAdvertisingState {
+  /// True while the controller is broadcasting our advertisement.
+  var active: Bool
+  /// Set when [active] is false because a start attempt was refused. Null
+  /// when advertising stopped because the application asked it to.
+  var failure: BleAdvertiseFailure? = nil
+  /// The controller's reason, in plain words (for logs and traces).
+  var reason: String? = nil
+
+  static func fromList(_ list: [Any?]) -> BleAdvertisingState? {
+    let active = list[0] as! Bool
+    var failure: BleAdvertiseFailure? = nil
+    let failureEnumVal: Int? = nilOrValue(list[1])
+    if let failureRawValue = failureEnumVal {
+      failure = BleAdvertiseFailure(rawValue: failureRawValue)!
+    }
+    let reason: String? = nilOrValue(list[2])
+
+    return BleAdvertisingState(
+      active: active,
+      failure: failure,
+      reason: reason
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      active,
+      failure?.rawValue,
+      reason,
+    ]
+  }
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct BleInitializeOptions {
   var showPowerAlert: Bool
@@ -744,8 +798,10 @@ private class GrassrootsBluetoothLayerFlutterApiCodecReader: FlutterStandardRead
     case 128:
       return BleAdvertisement.fromList(self.readValue() as! [Any?])
     case 129:
-      return BlePath.fromList(self.readValue() as! [Any?])
+      return BleAdvertisingState.fromList(self.readValue() as! [Any?])
     case 130:
+      return BlePath.fromList(self.readValue() as! [Any?])
+    case 131:
       return BlePayload.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
@@ -758,11 +814,14 @@ private class GrassrootsBluetoothLayerFlutterApiCodecWriter: FlutterStandardWrit
     if let value = value as? BleAdvertisement {
       super.writeByte(128)
       super.writeValue(value.toList())
-    } else if let value = value as? BlePath {
+    } else if let value = value as? BleAdvertisingState {
       super.writeByte(129)
       super.writeValue(value.toList())
-    } else if let value = value as? BlePayload {
+    } else if let value = value as? BlePath {
       super.writeByte(130)
+      super.writeValue(value.toList())
+    } else if let value = value as? BlePayload {
+      super.writeByte(131)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -788,6 +847,7 @@ class GrassrootsBluetoothLayerFlutterApiCodec: FlutterStandardMessageCodec {
 protocol GrassrootsBluetoothLayerFlutterApiProtocol {
   func onAdapterStateChanged(state stateArg: BleAdapterState, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onAdvertisement(advertisement advertisementArg: BleAdvertisement, completion: @escaping (Result<Void, FlutterError>) -> Void)
+  func onAdvertisingStateChanged(state stateArg: BleAdvertisingState, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onPathChanged(path pathArg: BlePath, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onPayloadReceived(payload payloadArg: BlePayload, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onLog(message messageArg: String, completion: @escaping (Result<Void, FlutterError>) -> Void)
@@ -822,6 +882,24 @@ class GrassrootsBluetoothLayerFlutterApi: GrassrootsBluetoothLayerFlutterApiProt
     let channelName: String = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisement"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
     channel.sendMessage([advertisementArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: String? = nilOrValue(listResponse[2])
+        completion(.failure(FlutterError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(Void()))
+      }
+    }
+  }
+  func onAdvertisingStateChanged(state stateArg: BleAdvertisingState, completion: @escaping (Result<Void, FlutterError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([stateArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {
         completion(.failure(createConnectionError(withChannelName: channelName)))
         return

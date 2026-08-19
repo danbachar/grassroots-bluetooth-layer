@@ -99,6 +99,73 @@ enum class BleWriteMode(val raw: Int) {
   }
 }
 
+/**
+ * Why the controller refused to start advertising, in terms of what the
+ * caller can do about it.
+ */
+enum class BleAdvertiseFailure(val raw: Int) {
+  /**
+   * The request is sound but the controller would not take it now — another
+   * app holds the advertising slots, or the stack faulted. A later
+   * `startAdvertising` with the same arguments can succeed.
+   */
+  TRANSIENT(0),
+  /**
+   * The request cannot succeed as written — the advertisement exceeds the
+   * payload budget, or the controller cannot advertise at all. Repeating the
+   * same `startAdvertising` changes nothing; the arguments have to change.
+   */
+  TERMINAL(1);
+
+  companion object {
+    fun ofRaw(raw: Int): BleAdvertiseFailure? {
+      return values().firstOrNull { it.raw == raw }
+    }
+  }
+}
+
+/**
+ * Whether this device is broadcasting its advertisement.
+ *
+ * A device that is not advertising is undiscoverable: peers cannot see it,
+ * no inbound peripheral leg can form, and nothing about the scan side says
+ * so — the radio keeps finding peers while no peer can find it. This state
+ * is reported so the application can record it rather than infer it.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class BleAdvertisingState (
+  /** True while the controller is broadcasting our advertisement. */
+  val active: Boolean,
+  /**
+   * Set when [active] is false because a start attempt was refused. Null
+   * when advertising stopped because the application asked it to.
+   */
+  val failure: BleAdvertiseFailure? = null,
+  /** The controller's reason, in plain words (for logs and traces). */
+  val reason: String? = null
+
+) {
+  companion object {
+    @Suppress("UNCHECKED_CAST")
+    fun fromList(list: List<Any?>): BleAdvertisingState {
+      val active = list[0] as Boolean
+      val failure: BleAdvertiseFailure? = (list[1] as Int?)?.let {
+        BleAdvertiseFailure.ofRaw(it)
+      }
+      val reason = list[2] as String?
+      return BleAdvertisingState(active, failure, reason)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf<Any?>(
+      active,
+      failure?.raw,
+      reason,
+    )
+  }
+}
+
 /** Generated class from Pigeon that represents data sent in messages. */
 data class BleInitializeOptions (
   val showPowerAlert: Boolean,
@@ -823,10 +890,15 @@ private object GrassrootsBluetoothLayerFlutterApiCodec : StandardMessageCodec() 
       }
       129.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          BlePath.fromList(it)
+          BleAdvertisingState.fromList(it)
         }
       }
       130.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          BlePath.fromList(it)
+        }
+      }
+      131.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
           BlePayload.fromList(it)
         }
@@ -840,12 +912,16 @@ private object GrassrootsBluetoothLayerFlutterApiCodec : StandardMessageCodec() 
         stream.write(128)
         writeValue(stream, value.toList())
       }
-      is BlePath -> {
+      is BleAdvertisingState -> {
         stream.write(129)
         writeValue(stream, value.toList())
       }
-      is BlePayload -> {
+      is BlePath -> {
         stream.write(130)
+        writeValue(stream, value.toList())
+      }
+      is BlePayload -> {
+        stream.write(131)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -883,6 +959,22 @@ class GrassrootsBluetoothLayerFlutterApi(private val binaryMessenger: BinaryMess
     val channelName = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisement"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
     channel.send(listOf(advertisementArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(createConnectionError(channelName)))
+      } 
+    }
+  }
+  fun onAdvertisingStateChanged(stateArg: BleAdvertisingState, callback: (Result<Unit>) -> Unit)
+{
+    val channelName = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(stateArg)) {
       if (it is List<*>) {
         if (it.size > 1) {
           callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))

@@ -92,6 +92,10 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     private var lastAdvertiseSettings: AdvertiseSettings? = null
     private var lastScanResponseData: AdvertiseData? = null
 
+    // The advertising state Dart was last told about, so repeated teardowns
+    // (adapter off, dispose, a stop with nothing running) do not restate it.
+    private var reportedAdvertisingState: BleAdvertisingState? = null
+
     private val centralPaths = ConcurrentHashMap<String, CentralPath>()
     private val peripheralPaths = ConcurrentHashMap<String, PeripheralPath>()
 
@@ -190,6 +194,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
         GrassrootsBluetoothLayerHostApi.setUp(binding.binaryMessenger, null)
         cleanup(emitEvents = false)
+        // The next isolate to attach holds no advertising state, so nothing it
+        // is told may be dropped as a repeat.
+        reportedAdvertisingState = null
         flutterApi = null
         bluetoothAdapter = null
         bluetoothManager = null
@@ -337,16 +344,16 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
         val callback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                logToFlutter("Advertising started for $serviceUuid")
-            }
-
-            override fun onStartFailure(errorCode: Int) {
                 val self = this
                 mainHandler.post {
                     if (advertiseCallback !== self) return@post
-                    logToFlutter("Advertising failed: ${advertiseFailureMessage(errorCode)}")
-                    stopAdvertisingInternal(emitEvents = false)
+                    logToFlutter("Advertising started for $serviceUuid")
+                    emitAdvertisingState(BleAdvertisingState(active = true))
                 }
+            }
+
+            override fun onStartFailure(errorCode: Int) {
+                resolveAdvertiseStartFailure(this, errorCode)
             }
         }
 
@@ -396,15 +403,16 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
 
         val callback = object : AdvertiseCallback() {
             override fun onStartSuccess(settingsInEffect: AdvertiseSettings?) {
-                logToFlutter("Advertising refreshed for $serviceUuid")
-            }
-
-            override fun onStartFailure(errorCode: Int) {
                 val self = this
                 mainHandler.post {
                     if (advertiseCallback !== self) return@post
-                    logToFlutter("Advertising refresh failed: ${advertiseFailureMessage(errorCode)}")
+                    logToFlutter("Advertising refreshed for $serviceUuid")
+                    emitAdvertisingState(BleAdvertisingState(active = true))
                 }
+            }
+
+            override fun onStartFailure(errorCode: Int) {
+                resolveAdvertiseStartFailure(this, errorCode)
             }
         }
 
@@ -415,6 +423,108 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             adv.startAdvertising(settings, advertiseData, scanResponse, callback)
         } catch (illegalArgumentException: IllegalArgumentException) {
             logToFlutter("Advertising refresh failed: ${illegalArgumentException.message}")
+            emitAdvertisingState(
+                BleAdvertisingState(
+                    active = false,
+                    failure = BleAdvertiseFailure.TERMINAL,
+                    reason = illegalArgumentException.message ?: "rejected advertise data",
+                )
+            )
+        }
+    }
+
+    /** What an advertise start refusal says about the request. */
+    private enum class AdvertiseRefusal {
+        /** The controller is already broadcasting our advertisement. */
+        ALREADY_ACTIVE,
+
+        /** The request is sound; the controller would not take it now. */
+        TRANSIENT,
+
+        /** The request cannot succeed as written. */
+        TERMINAL,
+    }
+
+    /**
+     * The controller refuses an advertise start for reasons that differ in what
+     * the caller can do about them, so the reason decides what survives.
+     *
+     * `ALREADY_STARTED` is not a failure: the radio is broadcasting our
+     * advertisement, which is the state the caller asked for.
+     *
+     * `TOO_MANY_ADVERTISERS` means another app (Google Play services' Nearby
+     * stack is the usual one) holds the controller's advertising sets, and
+     * `INTERNAL_ERROR` is a stack fault. Both leave the request itself valid,
+     * so a later start can succeed and the peripheral stack stays up.
+     *
+     * `DATA_TOO_LARGE` and `FEATURE_UNSUPPORTED` describe our own request or
+     * the hardware, and no later attempt with the same arguments changes
+     * either. A code this plugin does not name is read the same way, since
+     * nothing establishes it as recoverable.
+     */
+    private fun classifyAdvertiseRefusal(errorCode: Int): AdvertiseRefusal {
+        return when (errorCode) {
+            AdvertiseCallback.ADVERTISE_FAILED_ALREADY_STARTED -> AdvertiseRefusal.ALREADY_ACTIVE
+            AdvertiseCallback.ADVERTISE_FAILED_TOO_MANY_ADVERTISERS,
+            AdvertiseCallback.ADVERTISE_FAILED_INTERNAL_ERROR -> AdvertiseRefusal.TRANSIENT
+            else -> AdvertiseRefusal.TERMINAL
+        }
+    }
+
+    /**
+     * Act on a refused advertise start, and tell Dart whether this device is
+     * advertising.
+     *
+     * Both advertise callbacks — the one that starts a freshly built GATT
+     * service and the one that refreshes only the beacon — route here, so a
+     * refusal means the same thing whichever raised it.
+     *
+     * A transient refusal keeps the advertiser and the open GATT server, so a
+     * later start finds the service registered and only has to reach the
+     * radio. A terminal one tears the peripheral stack down.
+     *
+     * The event matters as much as the classification: a device whose
+     * advertising was refused keeps scanning and connecting normally while no
+     * peer can discover it, and nothing else above the plugin reports that.
+     */
+    private fun resolveAdvertiseStartFailure(source: AdvertiseCallback, errorCode: Int) {
+        mainHandler.post {
+            if (advertiseCallback !== source) return@post
+            val reason = advertiseFailureMessage(errorCode)
+            when (classifyAdvertiseRefusal(errorCode)) {
+                AdvertiseRefusal.ALREADY_ACTIVE -> {
+                    logToFlutter("Advertising start returned: $reason")
+                    emitAdvertisingState(BleAdvertisingState(active = true))
+                }
+
+                AdvertiseRefusal.TRANSIENT -> {
+                    logToFlutter(
+                        "Advertising refused: $reason — this device is undiscoverable; " +
+                            "advertiser and GATT server kept for a later start",
+                    )
+                    emitAdvertisingState(
+                        BleAdvertisingState(
+                            active = false,
+                            failure = BleAdvertiseFailure.TRANSIENT,
+                            reason = reason,
+                        )
+                    )
+                }
+
+                AdvertiseRefusal.TERMINAL -> {
+                    logToFlutter("Advertising failed: $reason")
+                    // Report the reason before the teardown, which otherwise
+                    // reports the same stop without one.
+                    emitAdvertisingState(
+                        BleAdvertisingState(
+                            active = false,
+                            failure = BleAdvertiseFailure.TERMINAL,
+                            reason = reason,
+                        )
+                    )
+                    stopAdvertisingInternal(emitEvents = false)
+                }
+            }
         }
     }
 
@@ -1738,6 +1848,14 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             } catch (_: Exception) {
             }
         }
+        // Every path that takes the advertiser down runs through here,
+        // including the GATT-service-add failures that reach no caller, so
+        // this is where Dart hears that the device stopped advertising. A
+        // refusal has already reported itself, with its reason; only a stop
+        // from a state Dart believes is advertising is news.
+        if (reportedAdvertisingState?.active == true) {
+            emitAdvertisingState(BleAdvertisingState(active = false))
+        }
         advertiseCallback = null
         advertiser = null
         pendingAdvertiseSettings = null
@@ -1915,6 +2033,25 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         mainHandler.post {
             flutterApi?.onAdvertisement(advertisement) {
                 handleFlutterCallbackResult("onAdvertisement", it)
+            }
+        }
+    }
+
+    /**
+     * Tell Dart whether this device is advertising. Repeats of the state Dart
+     * already holds are dropped, so a teardown that runs over an already-torn-
+     * down advertiser stays quiet.
+     *
+     * Called on the main thread only — the advertise callbacks arrive on a
+     * binder thread and hop before they get here, which keeps
+     * [reportedAdvertisingState] to one thread.
+     */
+    private fun emitAdvertisingState(state: BleAdvertisingState) {
+        if (reportedAdvertisingState == state) return
+        reportedAdvertisingState = state
+        mainHandler.post {
+            flutterApi?.onAdvertisingStateChanged(state) {
+                handleFlutterCallbackResult("onAdvertisingStateChanged", it)
             }
         }
     }

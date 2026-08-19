@@ -2,6 +2,12 @@
 
 ### Added
 
+- `advertisingStateChanges`: a stream of `BleAdvertisingState` reporting whether the radio is broadcasting our advertisement, and — when it is not because a start was refused — a `BleAdvertiseFailure` of `transient` or `terminal` plus the controller's reason. A device that is not advertising still scans, still dials, and still looks healthy from the inside while no peer can discover it; this is the event that says so.
+
+### Changed
+
+- Android reads a refused advertise start by its error code instead of treating all five alike. `ADVERTISE_FAILED_ALREADY_STARTED` is a success — the radio is broadcasting our advertisement. `ADVERTISE_FAILED_TOO_MANY_ADVERTISERS` (another app holds the controller's advertising sets) and `ADVERTISE_FAILED_INTERNAL_ERROR` are transient: the advertiser and the open GATT server stay up, so a later `startAdvertising` finds the service registered and only has to reach the radio. `ADVERTISE_FAILED_DATA_TOO_LARGE`, `ADVERTISE_FAILED_FEATURE_UNSUPPORTED` and any unnamed code tear the peripheral stack down. Both advertise callbacks — full start and beacon refresh — resolve a refusal the same way.
+
 - `linkSnapshot()`: OS-level ground truth of live physical BLE links. Returns one `BleLinkInfo` per distinct remote address with the GATT roles riding it (`clientRole`/`serverRole`). Android reads `BluetoothManager`'s GATT + GATT_SERVER connected-device lists merged by address; iOS reads live `CBPeripheral` state plus tracked centrals merged by identifier. Lets consumers distinguish a shared over-ACL pair (one entry, both roles) from a dual-ACL pair (two entries for one peer).
 
 ### Fixed

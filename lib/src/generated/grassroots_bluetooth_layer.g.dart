@@ -54,6 +54,62 @@ enum BleWriteMode {
   withResponse,
 }
 
+/// Why the controller refused to start advertising, in terms of what the
+/// caller can do about it.
+enum BleAdvertiseFailure {
+  /// The request is sound but the controller would not take it now — another
+  /// app holds the advertising slots, or the stack faulted. A later
+  /// `startAdvertising` with the same arguments can succeed.
+  transient,
+  /// The request cannot succeed as written — the advertisement exceeds the
+  /// payload budget, or the controller cannot advertise at all. Repeating the
+  /// same `startAdvertising` changes nothing; the arguments have to change.
+  terminal,
+}
+
+/// Whether this device is broadcasting its advertisement.
+///
+/// A device that is not advertising is undiscoverable: peers cannot see it,
+/// no inbound peripheral leg can form, and nothing about the scan side says
+/// so — the radio keeps finding peers while no peer can find it. This state
+/// is reported so the application can record it rather than infer it.
+class BleAdvertisingState {
+  BleAdvertisingState({
+    required this.active,
+    this.failure,
+    this.reason,
+  });
+
+  /// True while the controller is broadcasting our advertisement.
+  bool active;
+
+  /// Set when [active] is false because a start attempt was refused. Null
+  /// when advertising stopped because the application asked it to.
+  BleAdvertiseFailure? failure;
+
+  /// The controller's reason, in plain words (for logs and traces).
+  String? reason;
+
+  Object encode() {
+    return <Object?>[
+      active,
+      failure?.index,
+      reason,
+    ];
+  }
+
+  static BleAdvertisingState decode(Object result) {
+    result as List<Object?>;
+    return BleAdvertisingState(
+      active: result[0]! as bool,
+      failure: result[1] != null
+          ? BleAdvertiseFailure.values[result[1]! as int]
+          : null,
+      reason: result[2] as String?,
+    );
+  }
+}
+
 class BleInitializeOptions {
   BleInitializeOptions({
     required this.showPowerAlert,
@@ -898,11 +954,14 @@ class _GrassrootsBluetoothLayerFlutterApiCodec extends StandardMessageCodec {
     if (value is BleAdvertisement) {
       buffer.putUint8(128);
       writeValue(buffer, value.encode());
-    } else if (value is BlePath) {
+    } else if (value is BleAdvertisingState) {
       buffer.putUint8(129);
       writeValue(buffer, value.encode());
-    } else if (value is BlePayload) {
+    } else if (value is BlePath) {
       buffer.putUint8(130);
+      writeValue(buffer, value.encode());
+    } else if (value is BlePayload) {
+      buffer.putUint8(131);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -915,8 +974,10 @@ class _GrassrootsBluetoothLayerFlutterApiCodec extends StandardMessageCodec {
       case 128: 
         return BleAdvertisement.decode(readValue(buffer)!);
       case 129: 
-        return BlePath.decode(readValue(buffer)!);
+        return BleAdvertisingState.decode(readValue(buffer)!);
       case 130: 
+        return BlePath.decode(readValue(buffer)!);
+      case 131: 
         return BlePayload.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
@@ -930,6 +991,8 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
   void onAdapterStateChanged(BleAdapterState state);
 
   void onAdvertisement(BleAdvertisement advertisement);
+
+  void onAdvertisingStateChanged(BleAdvertisingState state);
 
   void onPathChanged(BlePath path);
 
@@ -979,6 +1042,31 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
               'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisement was null, expected non-null BleAdvertisement.');
           try {
             api.onAdvertisement(arg_advertisement!);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          }          catch (e) {
+            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          }
+        });
+      }
+    }
+    {
+      final BasicMessageChannel<Object?> __pigeon_channel = BasicMessageChannel<Object?>(
+          'dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged', pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
+      if (api == null) {
+        __pigeon_channel.setMessageHandler(null);
+      } else {
+        __pigeon_channel.setMessageHandler((Object? message) async {
+          assert(message != null,
+          'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged was null.');
+          final List<Object?> args = (message as List<Object?>?)!;
+          final BleAdvertisingState? arg_state = (args[0] as BleAdvertisingState?);
+          assert(arg_state != null,
+              'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged was null, expected non-null BleAdvertisingState.');
+          try {
+            api.onAdvertisingStateChanged(arg_state!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

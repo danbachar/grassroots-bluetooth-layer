@@ -41,6 +41,44 @@ enum BleWriteMode {
   withResponse,
 }
 
+/// Why the controller refused to start advertising, in terms of what the
+/// caller can do about it.
+enum BleAdvertiseFailure {
+  /// The request is sound but the controller would not take it now — another
+  /// app holds the advertising slots, or the stack faulted. A later
+  /// `startAdvertising` with the same arguments can succeed.
+  transient,
+
+  /// The request cannot succeed as written — the advertisement exceeds the
+  /// payload budget, or the controller cannot advertise at all. Repeating the
+  /// same `startAdvertising` changes nothing; the arguments have to change.
+  terminal,
+}
+
+/// Whether this device is broadcasting its advertisement.
+///
+/// A device that is not advertising is undiscoverable: peers cannot see it,
+/// no inbound peripheral leg can form, and nothing about the scan side says
+/// so — the radio keeps finding peers while no peer can find it. This state
+/// is reported so the application can record it rather than infer it.
+class BleAdvertisingState {
+  /// True while the controller is broadcasting our advertisement.
+  bool active;
+
+  /// Set when [active] is false because a start attempt was refused. Null
+  /// when advertising stopped because the application asked it to.
+  BleAdvertiseFailure? failure;
+
+  /// The controller's reason, in plain words (for logs and traces).
+  String? reason;
+
+  BleAdvertisingState({
+    required this.active,
+    this.failure,
+    this.reason,
+  });
+}
+
 class BleInitializeOptions {
   bool showPowerAlert;
   bool restoreState;
@@ -274,6 +312,8 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
   void onAdapterStateChanged(BleAdapterState state);
 
   void onAdvertisement(BleAdvertisement advertisement);
+
+  void onAdvertisingStateChanged(BleAdvertisingState state);
 
   void onPathChanged(BlePath path);
 

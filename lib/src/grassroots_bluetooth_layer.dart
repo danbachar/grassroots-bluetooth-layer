@@ -47,6 +47,13 @@ class GrassrootsBluetooth {
 
   Stream<BleAdvertisement> get advertisements => _callbacks.advertisements;
 
+  /// Whether this device is broadcasting its advertisement, and why not when
+  /// it is not. A device whose advertising was refused keeps scanning and
+  /// connecting normally while no peer can discover it, so callers that care
+  /// about being reachable should listen here. See [BleAdvertisingState].
+  Stream<BleAdvertisingState> get advertisingStateChanges =>
+      _callbacks.advertisingStateChanges;
+
   Stream<BlePath> get pathChanges => _callbacks.pathChanges;
 
   Stream<BlePayload> get payloads => _callbacks.payloads;
@@ -200,6 +207,8 @@ class FakeGrassrootsBluetoothCallbacks extends _GrassrootsBluetoothCallbacks {
 
   void pushAdapterState(BleAdapterState state) => onAdapterStateChanged(state);
   void pushAdvertisement(BleAdvertisement adv) => onAdvertisement(adv);
+  void pushAdvertisingState(BleAdvertisingState state) =>
+      onAdvertisingStateChanged(state);
   void pushPath(BlePath path) => onPathChanged(path);
   void pushPayload(BlePayload payload) => onPayloadReceived(payload);
 }
@@ -208,6 +217,8 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
   final _adapterStateController = StreamController<BleAdapterState>.broadcast();
   final _advertisementController =
       StreamController<BleAdvertisement>.broadcast();
+  final _advertisingStateController =
+      StreamController<BleAdvertisingState>.broadcast();
   final _pathController = StreamController<BlePath>.broadcast();
   final _payloadController = StreamController<BlePayload>.broadcast();
   final _logController = StreamController<String>.broadcast();
@@ -217,6 +228,9 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
 
   Stream<BleAdvertisement> get advertisements =>
       _advertisementController.stream;
+
+  Stream<BleAdvertisingState> get advertisingStateChanges =>
+      _advertisingStateController.stream;
 
   Stream<BlePath> get pathChanges => _pathController.stream;
 
@@ -232,6 +246,11 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
   @override
   void onAdvertisement(BleAdvertisement advertisement) {
     _advertisementController.add(advertisement);
+  }
+
+  @override
+  void onAdvertisingStateChanged(BleAdvertisingState state) {
+    _advertisingStateController.add(state);
   }
 
   @override
@@ -252,6 +271,7 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
   Future<void> close() async {
     await _adapterStateController.close();
     await _advertisementController.close();
+    await _advertisingStateController.close();
     await _pathController.close();
     await _payloadController.close();
     await _logController.close();
