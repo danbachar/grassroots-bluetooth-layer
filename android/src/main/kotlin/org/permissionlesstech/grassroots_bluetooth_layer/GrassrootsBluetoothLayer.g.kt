@@ -142,6 +142,14 @@ data class BleAdvertisingState (
    * when advertising stopped because the application asked it to.
    */
   val failure: BleAdvertiseFailure? = null,
+  /**
+   * The transmit power the controller GRANTED, as the Android level
+   * (0 ultra-low, 1 low, 2 medium, 3 high), or null when advertising is not
+   * active. We always ask for high; the radio is free to answer otherwise,
+   * and a different answer moves every RSSI a peer measures for us. Without
+   * this the trace records the signal and not the setting that produced it.
+   */
+  val txPowerLevel: Long? = null,
   /** The controller's reason, in plain words (for logs and traces). */
   val reason: String? = null
 
@@ -153,14 +161,16 @@ data class BleAdvertisingState (
       val failure: BleAdvertiseFailure? = (list[1] as Int?)?.let {
         BleAdvertiseFailure.ofRaw(it)
       }
-      val reason = list[2] as String?
-      return BleAdvertisingState(active, failure, reason)
+      val txPowerLevel = list[2].let { if (it is Int) it.toLong() else it as Long? }
+      val reason = list[3] as String?
+      return BleAdvertisingState(active, failure, txPowerLevel, reason)
     }
   }
   fun toList(): List<Any?> {
     return listOf<Any?>(
       active,
       failure?.raw,
+      txPowerLevel,
       reason,
     )
   }

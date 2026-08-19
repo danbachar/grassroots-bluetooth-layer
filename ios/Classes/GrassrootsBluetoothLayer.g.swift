@@ -99,6 +99,12 @@ struct BleAdvertisingState {
   /// Set when [active] is false because a start attempt was refused. Null
   /// when advertising stopped because the application asked it to.
   var failure: BleAdvertiseFailure? = nil
+  /// The transmit power the controller GRANTED, as the Android level
+  /// (0 ultra-low, 1 low, 2 medium, 3 high), or null when advertising is not
+  /// active. We always ask for high; the radio is free to answer otherwise,
+  /// and a different answer moves every RSSI a peer measures for us. Without
+  /// this the trace records the signal and not the setting that produced it.
+  var txPowerLevel: Int64? = nil
   /// The controller's reason, in plain words (for logs and traces).
   var reason: String? = nil
 
@@ -109,11 +115,13 @@ struct BleAdvertisingState {
     if let failureRawValue = failureEnumVal {
       failure = BleAdvertiseFailure(rawValue: failureRawValue)!
     }
-    let reason: String? = nilOrValue(list[2])
+    let txPowerLevel: Int64? = isNullish(list[2]) ? nil : (list[2] is Int64? ? list[2] as! Int64? : Int64(list[2] as! Int32))
+    let reason: String? = nilOrValue(list[3])
 
     return BleAdvertisingState(
       active: active,
       failure: failure,
+      txPowerLevel: txPowerLevel,
       reason: reason
     )
   }
@@ -121,6 +129,7 @@ struct BleAdvertisingState {
     return [
       active,
       failure?.rawValue,
+      txPowerLevel,
       reason,
     ]
   }

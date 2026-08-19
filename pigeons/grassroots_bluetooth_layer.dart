@@ -69,6 +69,13 @@ class BleAdvertisingState {
   /// when advertising stopped because the application asked it to.
   BleAdvertiseFailure? failure;
 
+  /// The transmit power the controller GRANTED, as the Android level
+  /// (0 ultra-low, 1 low, 2 medium, 3 high), or null when advertising is not
+  /// active. We always ask for high; the radio is free to answer otherwise,
+  /// and a different answer moves every RSSI a peer measures for us. Without
+  /// this the trace records the signal and not the setting that produced it.
+  int? txPowerLevel;
+
   /// The controller's reason, in plain words (for logs and traces).
   String? reason;
 

@@ -348,7 +348,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 mainHandler.post {
                     if (advertiseCallback !== self) return@post
                     logToFlutter("Advertising started for $serviceUuid")
-                    emitAdvertisingState(BleAdvertisingState(active = true))
+                    emitAdvertisingState(BleAdvertisingState(
+                        active = true,
+                        txPowerLevel = settingsInEffect?.txPowerLevel?.toLong()))
                 }
             }
 
@@ -407,7 +409,9 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 mainHandler.post {
                     if (advertiseCallback !== self) return@post
                     logToFlutter("Advertising refreshed for $serviceUuid")
-                    emitAdvertisingState(BleAdvertisingState(active = true))
+                    emitAdvertisingState(BleAdvertisingState(
+                        active = true,
+                        txPowerLevel = settingsInEffect?.txPowerLevel?.toLong()))
                 }
             }
 
