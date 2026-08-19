@@ -1085,6 +1085,10 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                             // left with 20 usable bytes, under the header of a
                             // single packet, on a link that looked healthy and
                             // could carry nothing.
+                            // Before anything reads this peer's services:
+                            // discovery must see what the peer has now, not
+                            // what it had under a previous rotation slot.
+                            clearGattCache(gatt)
                             enqueueGattOp(pathId, GattOp.RequestMtu(path.requestedMtu))
                         }
                         newState == BluetoothProfile.STATE_DISCONNECTED -> {
@@ -1774,6 +1778,35 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
         centralPaths.clear()
         unregisterAdapterReceiver()
+    }
+
+    /**
+     * Drop Android's cached attribute table for this peer.
+     *
+     * The stack remembers a device's services and handles by address and
+     * reuses them on reconnect instead of rediscovering. This project's GATT
+     * service UUID is derived from the peer's public key and rotates with its
+     * advertisement, so a remembered table routinely names a service the peer
+     * no longer exposes: discovery then finds nothing, the path is failed and
+     * disconnected, and the redial that follows reads the same stale entry
+     * again. Clearing it costs one rediscovery and makes every connection read
+     * what the peer actually has.
+     *
+     * There is no public API for this — `refresh()` is hidden, and its only
+     * effect is to drop that cache. Absent or refused, the connection still
+     * works from whatever is cached, so a failure here is logged and ignored.
+     */
+    private fun clearGattCache(gatt: BluetoothGatt): Boolean {
+        return try {
+            val cleared = BluetoothGatt::class.java
+                .getMethod("refresh")
+                .invoke(gatt) as? Boolean ?: false
+            if (!cleared) logToFlutter("GATT cache clear refused for ${gatt.device?.address}")
+            cleared
+        } catch (e: Exception) {
+            logToFlutter("GATT cache clear unavailable: ${e.javaClass.simpleName}")
+            false
+        }
     }
 
     private fun safeDisconnectAndClose(path: CentralPath) {
