@@ -91,7 +91,40 @@ enum BleAdvertiseFailure: Int {
 /// no inbound peripheral leg can form, and nothing about the scan side says
 /// so — the radio keeps finding peers while no peer can find it. This state
 /// is reported so the application can record it rather than infer it.
+/// Whether the controller is actually scanning.
 ///
+/// `startScan` returning says the request was accepted, not that the radio
+/// is listening. The distinction matters for the same reason it does for
+/// advertising: the application anchors its establishment measurements on
+/// the moment the radio is genuinely up, and a stamp taken when the request
+/// went in reports intent rather than fact.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct BleScanState {
+  /// True while the controller is scanning.
+  var active: Bool
+  /// The controller's reason, in plain words (for logs and traces). Set when
+  /// [active] is false because a start attempt was refused; null when the
+  /// scan stopped because the application asked it to.
+  var reason: String? = nil
+
+  static func fromList(_ list: [Any?]) -> BleScanState? {
+    let active = list[0] as! Bool
+    let reason: String? = nilOrValue(list[1])
+
+    return BleScanState(
+      active: active,
+      reason: reason
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      active,
+      reason,
+    ]
+  }
+}
+
 /// Generated class from Pigeon that represents data sent in messages.
 struct BleAdvertisingState {
   /// True while the controller is broadcasting our advertisement.
@@ -812,6 +845,8 @@ private class GrassrootsBluetoothLayerFlutterApiCodecReader: FlutterStandardRead
       return BlePath.fromList(self.readValue() as! [Any?])
     case 131:
       return BlePayload.fromList(self.readValue() as! [Any?])
+    case 132:
+      return BleScanState.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -831,6 +866,9 @@ private class GrassrootsBluetoothLayerFlutterApiCodecWriter: FlutterStandardWrit
       super.writeValue(value.toList())
     } else if let value = value as? BlePayload {
       super.writeByte(131)
+      super.writeValue(value.toList())
+    } else if let value = value as? BleScanState {
+      super.writeByte(132)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -857,6 +895,7 @@ protocol GrassrootsBluetoothLayerFlutterApiProtocol {
   func onAdapterStateChanged(state stateArg: BleAdapterState, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onAdvertisement(advertisement advertisementArg: BleAdvertisement, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onAdvertisingStateChanged(state stateArg: BleAdvertisingState, completion: @escaping (Result<Void, FlutterError>) -> Void)
+  func onScanStateChanged(state stateArg: BleScanState, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onPathChanged(path pathArg: BlePath, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onPayloadReceived(payload payloadArg: BlePayload, completion: @escaping (Result<Void, FlutterError>) -> Void)
   func onLog(message messageArg: String, completion: @escaping (Result<Void, FlutterError>) -> Void)
@@ -907,6 +946,24 @@ class GrassrootsBluetoothLayerFlutterApi: GrassrootsBluetoothLayerFlutterApiProt
   }
   func onAdvertisingStateChanged(state stateArg: BleAdvertisingState, completion: @escaping (Result<Void, FlutterError>) -> Void) {
     let channelName: String = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged"
+    let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
+    channel.sendMessage([stateArg] as [Any?]) { response in
+      guard let listResponse = response as? [Any?] else {
+        completion(.failure(createConnectionError(withChannelName: channelName)))
+        return
+      }
+      if listResponse.count > 1 {
+        let code: String = listResponse[0] as! String
+        let message: String? = nilOrValue(listResponse[1])
+        let details: String? = nilOrValue(listResponse[2])
+        completion(.failure(FlutterError(code: code, message: message, details: details)))
+      } else {
+        completion(.success(Void()))
+      }
+    }
+  }
+  func onScanStateChanged(state stateArg: BleScanState, completion: @escaping (Result<Void, FlutterError>) -> Void) {
+    let channelName: String = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onScanStateChanged"
     let channel = FlutterBasicMessageChannel(name: channelName, binaryMessenger: binaryMessenger, codec: codec)
     channel.sendMessage([stateArg] as [Any?]) { response in
       guard let listResponse = response as? [Any?] else {

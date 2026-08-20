@@ -12,4 +12,5 @@ export 'src/generated/grassroots_bluetooth_layer.g.dart'
         BlePathState,
         BlePayload,
         BleRole,
+        BleScanState,
         BleWriteMode;

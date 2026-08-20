@@ -54,6 +54,8 @@ class GrassrootsBluetooth {
   Stream<BleAdvertisingState> get advertisingStateChanges =>
       _callbacks.advertisingStateChanges;
 
+  Stream<BleScanState> get scanStateChanges => _callbacks.scanStateChanges;
+
   Stream<BlePath> get pathChanges => _callbacks.pathChanges;
 
   Stream<BlePayload> get payloads => _callbacks.payloads;
@@ -209,6 +211,7 @@ class FakeGrassrootsBluetoothCallbacks extends _GrassrootsBluetoothCallbacks {
   void pushAdvertisement(BleAdvertisement adv) => onAdvertisement(adv);
   void pushAdvertisingState(BleAdvertisingState state) =>
       onAdvertisingStateChanged(state);
+  void pushScanState(BleScanState state) => onScanStateChanged(state);
   void pushPath(BlePath path) => onPathChanged(path);
   void pushPayload(BlePayload payload) => onPayloadReceived(payload);
 }
@@ -219,6 +222,7 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
       StreamController<BleAdvertisement>.broadcast();
   final _advertisingStateController =
       StreamController<BleAdvertisingState>.broadcast();
+  final _scanStateController = StreamController<BleScanState>.broadcast();
   final _pathController = StreamController<BlePath>.broadcast();
   final _payloadController = StreamController<BlePayload>.broadcast();
   final _logController = StreamController<String>.broadcast();
@@ -231,6 +235,8 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
 
   Stream<BleAdvertisingState> get advertisingStateChanges =>
       _advertisingStateController.stream;
+
+  Stream<BleScanState> get scanStateChanges => _scanStateController.stream;
 
   Stream<BlePath> get pathChanges => _pathController.stream;
 
@@ -254,6 +260,11 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
   }
 
   @override
+  void onScanStateChanged(BleScanState state) {
+    _scanStateController.add(state);
+  }
+
+  @override
   void onPathChanged(BlePath path) {
     _pathController.add(path);
   }
@@ -272,6 +283,7 @@ class _GrassrootsBluetoothCallbacks extends GrassrootsBluetoothLayerFlutterApi {
     await _adapterStateController.close();
     await _advertisementController.close();
     await _advertisingStateController.close();
+    await _scanStateController.close();
     await _pathController.close();
     await _payloadController.close();
     await _logController.close();

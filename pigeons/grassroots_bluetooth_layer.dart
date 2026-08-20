@@ -61,6 +61,25 @@ enum BleAdvertiseFailure {
 /// no inbound peripheral leg can form, and nothing about the scan side says
 /// so — the radio keeps finding peers while no peer can find it. This state
 /// is reported so the application can record it rather than infer it.
+/// Whether the controller is actually scanning.
+///
+/// `startScan` returning says the request was accepted, not that the radio
+/// is listening. The distinction matters for the same reason it does for
+/// advertising: the application anchors its establishment measurements on
+/// the moment the radio is genuinely up, and a stamp taken when the request
+/// went in reports intent rather than fact.
+class BleScanState {
+  /// True while the controller is scanning.
+  bool active;
+
+  /// The controller's reason, in plain words (for logs and traces). Set when
+  /// [active] is false because a start attempt was refused; null when the
+  /// scan stopped because the application asked it to.
+  String? reason;
+
+  BleScanState({required this.active, this.reason});
+}
+
 class BleAdvertisingState {
   /// True while the controller is broadcasting our advertisement.
   bool active;
@@ -321,6 +340,8 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
   void onAdvertisement(BleAdvertisement advertisement);
 
   void onAdvertisingStateChanged(BleAdvertisingState state);
+
+  void onScanStateChanged(BleScanState state);
 
   void onPathChanged(BlePath path);
 

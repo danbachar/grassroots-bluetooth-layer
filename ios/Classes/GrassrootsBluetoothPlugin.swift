@@ -98,6 +98,8 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
   private var pendingCentralWrites: [String: [PendingCentralWrite]] = [:]
   private var pendingPeripheralUpdates: [PendingPeripheralUpdate] = []
   private var lastAdapterState: BleAdapterState = .unknown
+  private var lastAdvertisingActive: Bool = false
+  private var lastScanActive: Bool = false
   private var verboseLogging = false
   private var initialized = false
 
@@ -226,6 +228,8 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     pendingPeripheralUpdates.removeAll()
     peripheralManager?.stopAdvertising()
     peripheralManager?.removeAllServices()
+    // Asked for, so no failure — a null failure reads as "we stopped it".
+    emitAdvertisingState(active: false)
 
     for pathId in Array(peripheralPaths.keys) {
       markPeripheralPath(pathId: pathId, state: .disconnected, canKeep: false, error: nil)
@@ -261,6 +265,8 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     scanTimer = nil
     scanRequest = nil
     centralManager?.stopScan()
+    // No reason: asked for.
+    emitScanState(active: false)
     log("Scan stopped")
   }
 
@@ -400,8 +406,11 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     }
 
     centralManager?.stopScan()
+    emitScanState(active: false)
     peripheralManager?.stopAdvertising()
     peripheralManager?.removeAllServices()
+    // Asked for, so no failure — a null failure reads as "we stopped it".
+    emitAdvertisingState(active: false)
     centralManager?.delegate = nil
     peripheralManager?.delegate = nil
 
@@ -421,6 +430,8 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     pendingPeripheralUpdates.removeAll()
     initialized = false
     lastAdapterState = .unknown
+    lastAdvertisingActive = false
+    lastScanActive = false
   }
 
   private func ensureManagers(options: BleInitializeOptions? = nil) {
@@ -524,6 +535,19 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
       CBCentralManagerScanOptionAllowDuplicatesKey: request.allowDuplicates
     ]
     centralManager.scanForPeripherals(withServices: services, options: options)
+    emitScanState(active: centralManager.isScanning)
+  }
+
+  /// Tell Dart whether the controller is actually scanning.
+  ///
+  /// `scanForPeripherals` returns void, so the fact has to be read back off
+  /// the manager rather than assumed from the call. Dart anchors its
+  /// establishment measurements on the moment the radio is genuinely up.
+  private func emitScanState(active: Bool, reason: String? = nil) {
+    guard active != lastScanActive || reason != nil else { return }
+    lastScanActive = active
+    flutterApi.onScanStateChanged(
+      state: BleScanState(active: active, reason: reason)) { _ in }
   }
 
   private func lookupPeripheral(remoteId: String) -> CBPeripheral? {
@@ -1512,10 +1536,38 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
   func peripheralManagerDidStartAdvertising(_ peripheral: CBPeripheralManager, error: Error?) {
     if let error = error {
       log("Failed to start advertising: \(error.localizedDescription)")
+      emitAdvertisingState(active: false,
+                           failure: .terminal,
+                           reason: error.localizedDescription)
       return
     }
     log("Started BLE advertising. isAdvertising=\(peripheral.isAdvertising)")
+    emitAdvertisingState(active: true)
     scheduleAdvertiseHealthCheck(generation: advertiseGeneration)
+  }
+
+  /// Tell Dart whether the radio is actually broadcasting.
+  ///
+  /// `startAdvertising` returning says only that the request was accepted;
+  /// this says the controller answered. Dart anchors its establishment
+  /// measurements on the moment a phone becomes discoverable, so that moment
+  /// has to be reported rather than assumed.
+  ///
+  /// CoreBluetooth has no transmit-power readback, so `txPowerLevel` stays
+  /// null here where Android reports the granted level.
+  private func emitAdvertisingState(active: Bool,
+                                    failure: BleAdvertiseFailure? = nil,
+                                    reason: String? = nil) {
+    // Report every failure, but only the edges of a healthy advertiser: the
+    // health check re-confirms on a timer and Dart wants the moment, not the
+    // heartbeat.
+    guard active != lastAdvertisingActive || failure != nil else { return }
+    lastAdvertisingActive = active
+    flutterApi.onAdvertisingStateChanged(
+      state: BleAdvertisingState(active: active,
+                                 failure: failure,
+                                 txPowerLevel: nil,
+                                 reason: reason)) { _ in }
   }
 
   /// iOS sometimes returns `didStartAdvertising` with no error but stops
@@ -1533,6 +1585,9 @@ extension GrassrootsBluetoothDarwin: CBPeripheralManagerDelegate {
         self.scheduleAdvertiseHealthCheck(generation: generation)
       } else {
         self.log("[advertise-health] iOS silently stopped advertising — re-issuing.")
+        self.emitAdvertisingState(active: false,
+                                  failure: .transient,
+                                  reason: "iOS stopped advertising silently")
         self.restartAdvertisingIfPossible()
       }
     }

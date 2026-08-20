@@ -95,6 +95,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     // The advertising state Dart was last told about, so repeated teardowns
     // (adapter off, dispose, a stop with nothing running) do not restate it.
     private var reportedAdvertisingState: BleAdvertisingState? = null
+    private var reportedScanState: BleScanState? = null
 
     private val centralPaths = ConcurrentHashMap<String, CentralPath>()
     private val peripheralPaths = ConcurrentHashMap<String, PeripheralPath>()
@@ -599,6 +600,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                 mainHandler.post {
                     if (scanCallback !== self) return@post
                     logToFlutter("Scan failed: ${scanFailureMessage(errorCode)}")
+                    emitScanState(active = false, reason = scanFailureMessage(errorCode))
                     stopScanInternal()
                 }
             }
@@ -615,6 +617,7 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
         isScanning = true
         logToFlutter("Scan started")
+        emitScanState(active = true)
 
         if (request.timeoutMs > 0) {
             scanTimeoutRunnable = Runnable {
@@ -1888,6 +1891,8 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             logToFlutter("Scan stopped")
         }
         isScanning = false
+        // No reason: asked for. A refused start reports its own reason above.
+        emitScanState(active = false)
     }
 
     private fun stopAdvertisingInternal(emitEvents: Boolean) {
@@ -2098,6 +2103,22 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
      * binder thread and hop before they get here, which keeps
      * [reportedAdvertisingState] to one thread.
      */
+    /// Tell Dart whether the controller is actually scanning.
+    ///
+    /// `startScan` returning only means the request was accepted. Dart anchors
+    /// its establishment measurements on the moment the radio is genuinely
+    /// up, so that moment is reported rather than assumed.
+    private fun emitScanState(active: Boolean, reason: String? = null) {
+        val state = BleScanState(active = active, reason = reason)
+        if (reportedScanState == state) return
+        reportedScanState = state
+        mainHandler.post {
+            flutterApi?.onScanStateChanged(state) {
+                handleFlutterCallbackResult("onScanStateChanged", it)
+            }
+        }
+    }
+
     private fun emitAdvertisingState(state: BleAdvertisingState) {
         if (reportedAdvertisingState == state) return
         reportedAdvertisingState = state

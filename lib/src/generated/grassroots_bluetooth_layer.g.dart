@@ -73,6 +73,43 @@ enum BleAdvertiseFailure {
 /// no inbound peripheral leg can form, and nothing about the scan side says
 /// so — the radio keeps finding peers while no peer can find it. This state
 /// is reported so the application can record it rather than infer it.
+/// Whether the controller is actually scanning.
+///
+/// `startScan` returning says the request was accepted, not that the radio
+/// is listening. The distinction matters for the same reason it does for
+/// advertising: the application anchors its establishment measurements on
+/// the moment the radio is genuinely up, and a stamp taken when the request
+/// went in reports intent rather than fact.
+class BleScanState {
+  BleScanState({
+    required this.active,
+    this.reason,
+  });
+
+  /// True while the controller is scanning.
+  bool active;
+
+  /// The controller's reason, in plain words (for logs and traces). Set when
+  /// [active] is false because a start attempt was refused; null when the
+  /// scan stopped because the application asked it to.
+  String? reason;
+
+  Object encode() {
+    return <Object?>[
+      active,
+      reason,
+    ];
+  }
+
+  static BleScanState decode(Object result) {
+    result as List<Object?>;
+    return BleScanState(
+      active: result[0]! as bool,
+      reason: result[1] as String?,
+    );
+  }
+}
+
 class BleAdvertisingState {
   BleAdvertisingState({
     required this.active,
@@ -973,6 +1010,9 @@ class _GrassrootsBluetoothLayerFlutterApiCodec extends StandardMessageCodec {
     } else if (value is BlePayload) {
       buffer.putUint8(131);
       writeValue(buffer, value.encode());
+    } else if (value is BleScanState) {
+      buffer.putUint8(132);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -989,6 +1029,8 @@ class _GrassrootsBluetoothLayerFlutterApiCodec extends StandardMessageCodec {
         return BlePath.decode(readValue(buffer)!);
       case 131: 
         return BlePayload.decode(readValue(buffer)!);
+      case 132: 
+        return BleScanState.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -1003,6 +1045,8 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
   void onAdvertisement(BleAdvertisement advertisement);
 
   void onAdvertisingStateChanged(BleAdvertisingState state);
+
+  void onScanStateChanged(BleScanState state);
 
   void onPathChanged(BlePath path);
 
@@ -1077,6 +1121,31 @@ abstract class GrassrootsBluetoothLayerFlutterApi {
               'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged was null, expected non-null BleAdvertisingState.');
           try {
             api.onAdvertisingStateChanged(arg_state!);
+            return wrapResponse(empty: true);
+          } on PlatformException catch (e) {
+            return wrapResponse(error: e);
+          }          catch (e) {
+            return wrapResponse(error: PlatformException(code: 'error', message: e.toString()));
+          }
+        });
+      }
+    }
+    {
+      final BasicMessageChannel<Object?> __pigeon_channel = BasicMessageChannel<Object?>(
+          'dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onScanStateChanged', pigeonChannelCodec,
+          binaryMessenger: binaryMessenger);
+      if (api == null) {
+        __pigeon_channel.setMessageHandler(null);
+      } else {
+        __pigeon_channel.setMessageHandler((Object? message) async {
+          assert(message != null,
+          'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onScanStateChanged was null.');
+          final List<Object?> args = (message as List<Object?>?)!;
+          final BleScanState? arg_state = (args[0] as BleScanState?);
+          assert(arg_state != null,
+              'Argument for dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onScanStateChanged was null, expected non-null BleScanState.');
+          try {
+            api.onScanStateChanged(arg_state!);
             return wrapResponse(empty: true);
           } on PlatformException catch (e) {
             return wrapResponse(error: e);

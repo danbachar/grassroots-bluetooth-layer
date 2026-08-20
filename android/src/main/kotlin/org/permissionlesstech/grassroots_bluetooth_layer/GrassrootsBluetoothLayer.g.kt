@@ -131,9 +131,44 @@ enum class BleAdvertiseFailure(val raw: Int) {
  * no inbound peripheral leg can form, and nothing about the scan side says
  * so — the radio keeps finding peers while no peer can find it. This state
  * is reported so the application can record it rather than infer it.
+ * Whether the controller is actually scanning.
+ *
+ * `startScan` returning says the request was accepted, not that the radio
+ * is listening. The distinction matters for the same reason it does for
+ * advertising: the application anchors its establishment measurements on
+ * the moment the radio is genuinely up, and a stamp taken when the request
+ * went in reports intent rather than fact.
  *
  * Generated class from Pigeon that represents data sent in messages.
  */
+data class BleScanState (
+  /** True while the controller is scanning. */
+  val active: Boolean,
+  /**
+   * The controller's reason, in plain words (for logs and traces). Set when
+   * [active] is false because a start attempt was refused; null when the
+   * scan stopped because the application asked it to.
+   */
+  val reason: String? = null
+
+) {
+  companion object {
+    @Suppress("UNCHECKED_CAST")
+    fun fromList(list: List<Any?>): BleScanState {
+      val active = list[0] as Boolean
+      val reason = list[1] as String?
+      return BleScanState(active, reason)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf<Any?>(
+      active,
+      reason,
+    )
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
 data class BleAdvertisingState (
   /** True while the controller is broadcasting our advertisement. */
   val active: Boolean,
@@ -913,6 +948,11 @@ private object GrassrootsBluetoothLayerFlutterApiCodec : StandardMessageCodec() 
           BlePayload.fromList(it)
         }
       }
+      132.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          BleScanState.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -932,6 +972,10 @@ private object GrassrootsBluetoothLayerFlutterApiCodec : StandardMessageCodec() 
       }
       is BlePayload -> {
         stream.write(131)
+        writeValue(stream, value.toList())
+      }
+      is BleScanState -> {
+        stream.write(132)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -983,6 +1027,22 @@ class GrassrootsBluetoothLayerFlutterApi(private val binaryMessenger: BinaryMess
   fun onAdvertisingStateChanged(stateArg: BleAdvertisingState, callback: (Result<Unit>) -> Unit)
 {
     val channelName = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onAdvertisingStateChanged"
+    val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
+    channel.send(listOf(stateArg)) {
+      if (it is List<*>) {
+        if (it.size > 1) {
+          callback(Result.failure(FlutterError(it[0] as String, it[1] as String, it[2] as String?)))
+        } else {
+          callback(Result.success(Unit))
+        }
+      } else {
+        callback(Result.failure(createConnectionError(channelName)))
+      } 
+    }
+  }
+  fun onScanStateChanged(stateArg: BleScanState, callback: (Result<Unit>) -> Unit)
+{
+    val channelName = "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerFlutterApi.onScanStateChanged"
     val channel = BasicMessageChannel<Any?>(binaryMessenger, channelName, codec)
     channel.send(listOf(stateArg)) {
       if (it is List<*>) {
