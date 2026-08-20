@@ -10,6 +10,7 @@ export 'src/generated/grassroots_bluetooth_layer.g.dart'
         BleAdvertiseRequest,
         BleAdvertisement,
         BleAdvertisingState,
+        BleScanState,
         BleConnectRequest,
         BleDisconnectRequest,
         BleInitializeOptions,
