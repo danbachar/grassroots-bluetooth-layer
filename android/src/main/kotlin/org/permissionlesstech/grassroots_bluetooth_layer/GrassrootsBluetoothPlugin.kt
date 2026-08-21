@@ -245,6 +245,38 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     override fun startAdvertising(request: BleAdvertiseRequest) {
+        // Idempotent when nothing changed: recreating a running advertising
+        // set mints a NEW controller-generated random address, and a peer
+        // whose dial is in flight at the old one gets HCI 0x3E (the opaque
+        // 133) — the address rotation race the two-sided snoop pinned. If
+        // the same advertisement is already on the air, leave the set — and
+        // its address — alone; re-emit the state so a freshly started
+        // transport still gets its boot confirmation.
+        if (advertiseCallback != null &&
+            reportedAdvertisingState?.active == true &&
+            request.serviceUuid == advertisedServiceUuid?.toString() &&
+            request.characteristicUuid == advertisedCharacteristicUuid?.toString()
+        ) {
+            logToFlutter(
+                "Advertising already running for ${request.serviceUuid} — " +
+                    "left untouched (same parameters, address preserved)")
+            if (gattServer == null) {
+                // A keepAdvertiser dispose closed the server under the live
+                // set; rebuild it so inbound legs can form again. The flag
+                // tells onServiceAdded to leave the running set alone.
+                serverRebuildUnderLiveSet = true
+                rebuildGattServer()
+            } else {
+                reportedAdvertisingState?.let { st ->
+                    mainHandler.post {
+                        flutterApi?.onAdvertisingStateChanged(st) {
+                            handleFlutterCallbackResult("onAdvertisingStateChanged", it)
+                        }
+                    }
+                }
+            }
+            return
+        }
         ensurePoweredOn()
         requireAdvertisePermission()
         requireConnectPermission()
@@ -779,8 +811,8 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
     }
 
-    override fun dispose() {
-        cleanup(emitEvents = true)
+    override fun dispose(keepAdvertiser: Boolean) {
+        cleanup(emitEvents = true, keepAdvertiser = keepAdvertiser)
     }
 
     private val adapterReceiver = object : BroadcastReceiver() {
@@ -1159,6 +1191,21 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
                     return@post
                 }
 
+                if (serverRebuildUnderLiveSet) {
+                    serverRebuildUnderLiveSet = false
+                    logToFlutter(
+                        "GATT service re-added under the live advertising set " +
+                            "for ${service.uuid} — set left alone")
+                    // Direct post: the deduped emit would swallow a state that
+                    // never changed, and the freshly bounced transport needs
+                    // this confirmation to reach `active`.
+                    reportedAdvertisingState?.let { st ->
+                        flutterApi?.onAdvertisingStateChanged(st) {
+                            handleFlutterCallbackResult("onAdvertisingStateChanged", it)
+                        }
+                    }
+                    return@post
+                }
                 val adv = advertiser
                 val callback = advertiseCallback
                 val settings = pendingAdvertiseSettings
@@ -1929,27 +1976,68 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         emitScanState(active = false)
     }
 
-    private fun stopAdvertisingInternal(emitEvents: Boolean) {
-        val callback = advertiseCallback
-        if (callback != null) {
-            try {
-                advertiser?.stopAdvertising(callback)
-            } catch (_: Exception) {
+    private var serverRebuildUnderLiveSet = false
+
+    /// Reopen the GATT server and re-add the service under a live advertising
+    /// set — the keepAdvertiser bounce's second half. Mirrors the service the
+    /// original start built; the set on the air is not touched.
+    private fun rebuildGattServer() {
+        val manager = bluetoothManager ?: return
+        val charUuid = advertisedCharacteristicUuid ?: return
+        val svcUuid = gattServiceUuid ?: return
+        val permissions = BluetoothGattCharacteristic.PERMISSION_READ or
+            BluetoothGattCharacteristic.PERMISSION_WRITE
+        val characteristic = BluetoothGattCharacteristic(
+            charUuid,
+            BluetoothGattCharacteristic.PROPERTY_READ or
+                BluetoothGattCharacteristic.PROPERTY_WRITE or
+                BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or
+                BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+            permissions,
+        )
+        val cccd = BluetoothGattDescriptor(
+            CCCD_UUID,
+            BluetoothGattDescriptor.PERMISSION_READ or
+                BluetoothGattDescriptor.PERMISSION_WRITE,
+        )
+        characteristic.addDescriptor(cccd)
+        val service = BluetoothGattService(
+            svcUuid, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        service.addCharacteristic(characteristic)
+        gattServer = manager.openGattServer(context, gattServerCallback)
+        serverCharacteristic = characteristic
+        if (gattServer?.addService(service) != true) {
+            logToFlutter("GATT server rebuild failed for $svcUuid")
+            serverRebuildUnderLiveSet = false
+        }
+    }
+
+    private fun stopAdvertisingInternal(
+        emitEvents: Boolean,
+        keepAdvertiser: Boolean = false,
+    ) {
+        if (!keepAdvertiser) {
+            val callback = advertiseCallback
+            if (callback != null) {
+                try {
+                    advertiser?.stopAdvertising(callback)
+                } catch (_: Exception) {
+                }
             }
+            // Every path that takes the advertiser down runs through here,
+            // including the GATT-service-add failures that reach no caller, so
+            // this is where Dart hears that the device stopped advertising. A
+            // refusal has already reported itself, with its reason; only a stop
+            // from a state Dart believes is advertising is news.
+            if (reportedAdvertisingState?.active == true) {
+                emitAdvertisingState(BleAdvertisingState(active = false))
+            }
+            advertiseCallback = null
+            advertiser = null
+            pendingAdvertiseSettings = null
+            pendingAdvertiseData = null
+            pendingScanResponseData = null
         }
-        // Every path that takes the advertiser down runs through here,
-        // including the GATT-service-add failures that reach no caller, so
-        // this is where Dart hears that the device stopped advertising. A
-        // refusal has already reported itself, with its reason; only a stop
-        // from a state Dart believes is advertising is news.
-        if (reportedAdvertisingState?.active == true) {
-            emitAdvertisingState(BleAdvertisingState(active = false))
-        }
-        advertiseCallback = null
-        advertiser = null
-        pendingAdvertiseSettings = null
-        pendingAdvertiseData = null
-        pendingScanResponseData = null
 
         peripheralPaths.values.forEach { path ->
             try {
@@ -1969,16 +2057,26 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
         gattServer = null
         serverCharacteristic = null
-        advertisedServiceUuid = null
-        advertisedCharacteristicUuid = null
-        gattServiceUuid = null
-        lastAdvertiseSettings = null
-        lastScanResponseData = null
+        if (!keepAdvertiser) {
+            // With the advertiser surviving, these describe the set still on
+            // the air; the next startAdvertising compares against them to
+            // take its leave-it-alone branch.
+            advertisedServiceUuid = null
+            advertisedCharacteristicUuid = null
+            gattServiceUuid = null
+            lastAdvertiseSettings = null
+            lastScanResponseData = null
+        }
     }
 
-    private fun cleanup(emitEvents: Boolean) {
+    private fun cleanup(emitEvents: Boolean, keepAdvertiser: Boolean = false) {
         stopScanInternal()
-        stopAdvertisingInternal(emitEvents)
+        // Keeping the advertiser keeps its controller-generated address: the
+        // device stays discoverable at the SAME address through a transport
+        // bounce, so a peer's in-flight dial cannot race a rotation. The
+        // GATT server and every path still die below — links reset, identity
+        // broadcast survives.
+        stopAdvertisingInternal(emitEvents, keepAdvertiser = keepAdvertiser)
         centralPaths.values.forEach { path ->
             path.connectTimeoutRunnable?.let { mainHandler.removeCallbacks(it) }
             path.connectTimeoutRunnable = null

@@ -185,11 +185,11 @@ class GrassrootsBluetooth {
     return result.whereType<BleLinkInfo>().toList(growable: false);
   }
 
-  Future<void> dispose() async {
+  Future<void> dispose({bool keepAdvertiser = false}) async {
     if (_disposed) return;
     _disposed = true;
     try {
-      await _hostApi.dispose();
+      await _hostApi.dispose(keepAdvertiser);
     } finally {
       if (_wireFlutterApi) {
         GrassrootsBluetoothLayerFlutterApi.setup(null);

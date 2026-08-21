@@ -639,7 +639,13 @@ protocol GrassrootsBluetoothLayerHostApi {
   /// Diagnostic: lets the app distinguish a shared over-ACL pair (one entry,
   /// both roles) from a dual-ACL pair (two entries for the same peer).
   func linkSnapshot() throws -> [BleLinkInfo]
-  func dispose() throws
+  /// Tear the transport down. With [keepAdvertiser] the advertising set —
+  /// and therefore its controller-generated random address — survives:
+  /// links and the GATT server still die, but the device stays discoverable
+  /// at the SAME address, so a peer's in-flight dial does not race an
+  /// address rotation. A testbed bounce keeps the advertiser; a real stop
+  /// (settings toggle, shutdown) does not.
+  func dispose(keepAdvertiser: Bool) throws
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -819,11 +825,19 @@ class GrassrootsBluetoothLayerHostApiSetup {
     } else {
       linkSnapshotChannel.setMessageHandler(nil)
     }
+    /// Tear the transport down. With [keepAdvertiser] the advertising set —
+    /// and therefore its controller-generated random address — survives:
+    /// links and the GATT server still die, but the device stays discoverable
+    /// at the SAME address, so a peer's in-flight dial does not race an
+    /// address rotation. A testbed bounce keeps the advertiser; a real stop
+    /// (settings toggle, shutdown) does not.
     let disposeChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.dispose", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
-      disposeChannel.setMessageHandler { _, reply in
+      disposeChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let keepAdvertiserArg = args[0] as! Bool
         do {
-          try api.dispose()
+          try api.dispose(keepAdvertiser: keepAdvertiserArg)
           reply(wrapResult(nil))
         } catch {
           reply(wrapError(error))

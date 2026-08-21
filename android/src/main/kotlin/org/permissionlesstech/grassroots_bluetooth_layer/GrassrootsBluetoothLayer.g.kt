@@ -683,7 +683,15 @@ interface GrassrootsBluetoothLayerHostApi {
    * both roles) from a dual-ACL pair (two entries for the same peer).
    */
   fun linkSnapshot(): List<BleLinkInfo>
-  fun dispose()
+  /**
+   * Tear the transport down. With [keepAdvertiser] the advertising set —
+   * and therefore its controller-generated random address — survives:
+   * links and the GATT server still die, but the device stays discoverable
+   * at the SAME address, so a peer's in-flight dial does not race an
+   * address rotation. A testbed bounce keeps the advertiser; a real stop
+   * (settings toggle, shutdown) does not.
+   */
+  fun dispose(keepAdvertiser: Boolean)
 
   companion object {
     /** The codec used by GrassrootsBluetoothLayerHostApi. */
@@ -907,10 +915,12 @@ interface GrassrootsBluetoothLayerHostApi {
       run {
         val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.dispose", codec)
         if (api != null) {
-          channel.setMessageHandler { _, reply ->
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val keepAdvertiserArg = args[0] as Boolean
             var wrapped: List<Any?>
             try {
-              api.dispose()
+              api.dispose(keepAdvertiserArg)
               wrapped = listOf<Any?>(null)
             } catch (exception: Throwable) {
               wrapped = wrapError(exception)
