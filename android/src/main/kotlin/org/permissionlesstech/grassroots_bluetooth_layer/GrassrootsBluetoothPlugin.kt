@@ -586,13 +586,35 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .build()
 
+        // Reject cached advertisements. On a fresh scan Android replays
+        // results it received under the PREVIOUS scan, and after a transport
+        // bounce those name the peer's pre-bounce random address — an address
+        // that is no longer on the air. Dialing one costs an HCI 0x3E (the
+        // opaque GATT 133) plus the cooldown behind it, and it outraces the
+        // peer's live advertisement every time because the replay arrives
+        // first. ScanResult carries the instant the advertisement was
+        // actually RECEIVED, so the guard is exact: only advertisements
+        // received after this scan started are real sightings.
+        val scanStartedNanos = android.os.SystemClock.elapsedRealtimeNanos()
         scanCallback = object : ScanCallback() {
+            private fun fresh(result: ScanResult): Boolean {
+                if (result.timestampNanos >= scanStartedNanos) return true
+                logToFlutter(
+                    "scan: dropping cached advertisement from " +
+                        "${result.device.address} (received " +
+                        "${(scanStartedNanos - result.timestampNanos) / 1_000_000} ms " +
+                        "before this scan started)")
+                return false
+            }
+
             override fun onScanResult(callbackType: Int, result: ScanResult) {
+                if (!fresh(result)) return
                 mainHandler.post { handleScanResult(result) }
             }
 
             override fun onBatchScanResults(results: MutableList<ScanResult>) {
-                mainHandler.post { results.forEach { handleScanResult(it) } }
+                val live = results.filter { fresh(it) }
+                mainHandler.post { live.forEach { handleScanResult(it) } }
             }
 
             override fun onScanFailed(errorCode: Int) {
