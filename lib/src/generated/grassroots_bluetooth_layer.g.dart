@@ -971,13 +971,7 @@ class GrassrootsBluetoothLayerHostApi {
     }
   }
 
-  /// Tear the transport down. With [keepAdvertiser] the advertising set —
-  /// and therefore its controller-generated random address — survives:
-  /// links and the GATT server still die, but the device stays discoverable
-  /// at the SAME address, so a peer's in-flight dial does not race an
-  /// address rotation. A testbed bounce keeps the advertiser; a real stop
-  /// (settings toggle, shutdown) does not.
-  Future<void> dispose(bool keepAdvertiser) async {
+  Future<void> dispose() async {
     const String __pigeon_channelName = 'dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.dispose';
     final BasicMessageChannel<Object?> __pigeon_channel = BasicMessageChannel<Object?>(
       __pigeon_channelName,
@@ -985,7 +979,7 @@ class GrassrootsBluetoothLayerHostApi {
       binaryMessenger: __pigeon_binaryMessenger,
     );
     final List<Object?>? __pigeon_replyList =
-        await __pigeon_channel.send(<Object?>[keepAdvertiser]) as List<Object?>?;
+        await __pigeon_channel.send(null) as List<Object?>?;
     if (__pigeon_replyList == null) {
       throw _createConnectionError(__pigeon_channelName);
     } else if (__pigeon_replyList.length > 1) {

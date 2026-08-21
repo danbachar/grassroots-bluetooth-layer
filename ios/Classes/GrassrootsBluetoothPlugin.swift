@@ -387,24 +387,7 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     }
   }
 
-  func dispose(keepAdvertiser: Bool) throws {
-    if keepAdvertiser {
-      // The advertising set — and its address — survives a transport bounce;
-      // links and the scanner still die. CoreBluetooth rotates addresses on
-      // its own schedule regardless, so this only removes OUR restarts.
-      scanTimer?.invalidate(); scanTimer = nil
-      scanRequest = nil
-      centralManager?.stopScan()
-      emitScanState(active: false)
-      for (pathId, path) in centralPaths {
-        centralManager?.cancelPeripheralConnection(path.peripheral)
-        markCentralPath(pathId: pathId, state: .disconnected, canKeep: false, error: nil)
-      }
-      for pathId in Array(peripheralPaths.keys) {
-        markPeripheralPath(pathId: pathId, state: .disconnected, canKeep: false, error: nil)
-      }
-      return
-    }
+  func dispose() throws {
     scanTimer?.invalidate()
     scanTimer = nil
     connectTimers.values.forEach { $0.invalidate() }

@@ -330,13 +330,7 @@ abstract class GrassrootsBluetoothLayerHostApi {
   /// both roles) from a dual-ACL pair (two entries for the same peer).
   List<BleLinkInfo> linkSnapshot();
 
-  /// Tear the transport down. With [keepAdvertiser] the advertising set —
-  /// and therefore its controller-generated random address — survives:
-  /// links and the GATT server still die, but the device stays discoverable
-  /// at the SAME address, so a peer's in-flight dial does not race an
-  /// address rotation. A testbed bounce keeps the advertiser; a real stop
-  /// (settings toggle, shutdown) does not.
-  void dispose(bool keepAdvertiser);
+  void dispose();
 }
 
 @FlutterApi()
