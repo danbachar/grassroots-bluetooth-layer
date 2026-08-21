@@ -1769,6 +1769,18 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
     }
 
     private fun handleScanResult(result: ScanResult) {
+        // Provenance for every forwarded advertisement, straight to logcat
+        // (android.util.Log, not the Flutter channel: at advertisement rate
+        // the channel is the bottleneck and would perturb what we measure).
+        // The 133 investigation needs the delivery ledger: which addresses
+        // the scanner handed the app, when, and how old each reception was
+        // at handling time. Joined against the app's dialIssued records this
+        // names the delivery behind every doomed dial.
+        android.util.Log.d(
+            "GrsAdv",
+            "${result.device.address} rssi=${result.rssi} age_ms=" +
+                ((android.os.SystemClock.elapsedRealtimeNanos() -
+                    result.timestampNanos) / 1_000_000))
         // Real BLE RSSI is always negative dBm (typically -30 to -100).
         // Some Android firmwares emit `result.rssi >= 0` for scan-result
         // cache replays or transient hardware states where the radio has
