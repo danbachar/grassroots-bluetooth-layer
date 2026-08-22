@@ -992,6 +992,40 @@ class GrassrootsBluetoothLayerHostApi {
       return;
     }
   }
+
+  /// Cycle the OS Bluetooth adapter — the full stack, radio down and up.
+  ///
+  /// Only Android 12 and below permit an app to do this; on newer Android
+  /// the call returns false and the caller records that the reset did not
+  /// happen rather than pretending it did. The adapter-state events carry
+  /// the OFF/ON transitions as usual, so the transport re-parks and
+  /// restarts through its normal adapter handling.
+  Future<bool> restartAdapter() async {
+    const String __pigeon_channelName = 'dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.restartAdapter';
+    final BasicMessageChannel<Object?> __pigeon_channel = BasicMessageChannel<Object?>(
+      __pigeon_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: __pigeon_binaryMessenger,
+    );
+    final List<Object?>? __pigeon_replyList =
+        await __pigeon_channel.send(null) as List<Object?>?;
+    if (__pigeon_replyList == null) {
+      throw _createConnectionError(__pigeon_channelName);
+    } else if (__pigeon_replyList.length > 1) {
+      throw PlatformException(
+        code: __pigeon_replyList[0]! as String,
+        message: __pigeon_replyList[1] as String?,
+        details: __pigeon_replyList[2],
+      );
+    } else if (__pigeon_replyList[0] == null) {
+      throw PlatformException(
+        code: 'null-error',
+        message: 'Host platform returned null value for non-null return value.',
+      );
+    } else {
+      return (__pigeon_replyList[0] as bool?)!;
+    }
+  }
 }
 
 class _GrassrootsBluetoothLayerFlutterApiCodec extends StandardMessageCodec {

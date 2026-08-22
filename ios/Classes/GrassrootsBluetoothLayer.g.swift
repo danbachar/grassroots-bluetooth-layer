@@ -640,6 +640,14 @@ protocol GrassrootsBluetoothLayerHostApi {
   /// both roles) from a dual-ACL pair (two entries for the same peer).
   func linkSnapshot() throws -> [BleLinkInfo]
   func dispose() throws
+  /// Cycle the OS Bluetooth adapter — the full stack, radio down and up.
+  ///
+  /// Only Android 12 and below permit an app to do this; on newer Android
+  /// the call returns false and the caller records that the reset did not
+  /// happen rather than pretending it did. The adapter-state events carry
+  /// the OFF/ON transitions as usual, so the transport re-parks and
+  /// restarts through its normal adapter handling.
+  func restartAdapter() throws -> Bool
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -831,6 +839,26 @@ class GrassrootsBluetoothLayerHostApiSetup {
       }
     } else {
       disposeChannel.setMessageHandler(nil)
+    }
+    /// Cycle the OS Bluetooth adapter — the full stack, radio down and up.
+    ///
+    /// Only Android 12 and below permit an app to do this; on newer Android
+    /// the call returns false and the caller records that the reset did not
+    /// happen rather than pretending it did. The adapter-state events carry
+    /// the OFF/ON transitions as usual, so the transport re-parks and
+    /// restarts through its normal adapter handling.
+    let restartAdapterChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.restartAdapter", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      restartAdapterChannel.setMessageHandler { _, reply in
+        do {
+          let result = try api.restartAdapter()
+          reply(wrapResult(result))
+        } catch {
+          reply(wrapError(error))
+        }
+      }
+    } else {
+      restartAdapterChannel.setMessageHandler(nil)
     }
   }
 }

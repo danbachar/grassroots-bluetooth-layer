@@ -684,6 +684,16 @@ interface GrassrootsBluetoothLayerHostApi {
    */
   fun linkSnapshot(): List<BleLinkInfo>
   fun dispose()
+  /**
+   * Cycle the OS Bluetooth adapter — the full stack, radio down and up.
+   *
+   * Only Android 12 and below permit an app to do this; on newer Android
+   * the call returns false and the caller records that the reset did not
+   * happen rather than pretending it did. The adapter-state events carry
+   * the OFF/ON transitions as usual, so the transport re-parks and
+   * restarts through its normal adapter handling.
+   */
+  fun restartAdapter(): Boolean
 
   companion object {
     /** The codec used by GrassrootsBluetoothLayerHostApi. */
@@ -912,6 +922,22 @@ interface GrassrootsBluetoothLayerHostApi {
             try {
               api.dispose()
               wrapped = listOf<Any?>(null)
+            } catch (exception: Throwable) {
+              wrapped = wrapError(exception)
+            }
+            reply.reply(wrapped)
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.grassroots_bluetooth_layer.GrassrootsBluetoothLayerHostApi.restartAdapter", codec)
+        if (api != null) {
+          channel.setMessageHandler { _, reply ->
+            var wrapped: List<Any?>
+            try {
+              wrapped = listOf<Any?>(api.restartAdapter())
             } catch (exception: Throwable) {
               wrapped = wrapError(exception)
             }

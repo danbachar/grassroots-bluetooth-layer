@@ -779,6 +779,45 @@ class GrassrootsBluetoothPlugin : FlutterPlugin, GrassrootsBluetoothLayerHostApi
         }
     }
 
+    override fun restartAdapter(): Boolean {
+        // Android 13 removed app-driven adapter toggling; there the honest
+        // answer is false and the caller records that no reset happened.
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            logToFlutter("Adapter restart unsupported on this Android version")
+            return false
+        }
+        val adapter = bluetoothAdapter ?: return false
+        return try {
+            @Suppress("DEPRECATION")
+            val down = adapter.disable()
+            if (!down) {
+                logToFlutter("Adapter restart: disable() refused")
+                return false
+            }
+            // Re-enable once the stack reports OFF; polling from the main
+            // handler keeps this off the binder thread. The adapter-state
+            // receiver drives the transport's own park/restart as usual.
+            fun tryEnable(attempt: Int) {
+                if (adapter.state == BluetoothAdapter.STATE_OFF) {
+                    @Suppress("DEPRECATION")
+                    adapter.enable()
+                    logToFlutter("Adapter restart: stack cycled")
+                } else if (attempt < 40) {
+                    mainHandler.postDelayed({ tryEnable(attempt + 1) }, 250)
+                } else {
+                    @Suppress("DEPRECATION")
+                    adapter.enable()
+                    logToFlutter("Adapter restart: OFF never reported, enabling anyway")
+                }
+            }
+            mainHandler.postDelayed({ tryEnable(0) }, 250)
+            true
+        } catch (e: SecurityException) {
+            logToFlutter("Adapter restart refused: ${e.message}")
+            false
+        }
+    }
+
     override fun dispose() {
         cleanup(emitEvents = true)
     }

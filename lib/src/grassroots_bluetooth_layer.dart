@@ -185,6 +185,17 @@ class GrassrootsBluetooth {
     return result.whereType<BleLinkInfo>().toList(growable: false);
   }
 
+  /// Cycle the OS Bluetooth adapter. True if the cycle was initiated; false
+  /// where the platform forbids it (Android 13+, iOS) — the caller records
+  /// that no reset happened.
+  Future<bool> restartAdapter() async {
+    try {
+      return await _hostApi.restartAdapter();
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> dispose() async {
     if (_disposed) return;
     _disposed = true;

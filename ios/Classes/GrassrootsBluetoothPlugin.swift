@@ -387,6 +387,11 @@ private final class GrassrootsBluetoothDarwin: NSObject, GrassrootsBluetoothLaye
     }
   }
 
+  func restartAdapter() throws -> Bool {
+    // iOS offers no app-driven adapter cycling.
+    return false
+  }
+
   func dispose() throws {
     scanTimer?.invalidate()
     scanTimer = nil

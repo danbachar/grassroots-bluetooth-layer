@@ -331,6 +331,15 @@ abstract class GrassrootsBluetoothLayerHostApi {
   List<BleLinkInfo> linkSnapshot();
 
   void dispose();
+
+  /// Cycle the OS Bluetooth adapter — the full stack, radio down and up.
+  ///
+  /// Only Android 12 and below permit an app to do this; on newer Android
+  /// the call returns false and the caller records that the reset did not
+  /// happen rather than pretending it did. The adapter-state events carry
+  /// the OFF/ON transitions as usual, so the transport re-parks and
+  /// restarts through its normal adapter handling.
+  bool restartAdapter();
 }
 
 @FlutterApi()
