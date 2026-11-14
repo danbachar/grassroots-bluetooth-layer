@@ -1,7 +1,11 @@
 import CoreBluetooth
-import Flutter
 import Foundation
-import UIKit
+#if os(iOS)
+  import Flutter
+  import UIKit
+#elseif os(macOS)
+  import FlutterMacOS
+#endif
 
 // Pigeon 17.3.0's generated Swift code uses `Result<Void, FlutterError>`,
 // which requires `FlutterError` to conform to `Error`. The generator
@@ -12,7 +16,11 @@ extension FlutterError: Error {}
 
 public class GrassrootsBluetoothPlugin: NSObject, FlutterPlugin {
   public static func register(with registrar: FlutterPluginRegistrar) {
-    let messenger = registrar.messenger()
+    #if os(iOS)
+      let messenger = registrar.messenger()
+    #else
+      let messenger = registrar.messenger
+    #endif
     let api = GrassrootsBluetoothDarwin(binaryMessenger: messenger)
     GrassrootsBluetoothLayerHostApiSetup.setUp(binaryMessenger: messenger, api: api)
   }

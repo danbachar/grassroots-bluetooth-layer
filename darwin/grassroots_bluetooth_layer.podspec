@@ -13,8 +13,10 @@ Unified bondless BLE central and peripheral transport plugin for Grassroots-styl
   s.author           = { 'Permissionless Tech' => 'dev@permissionless.tech' }
   s.source           = { :path => '.' }
   s.source_files     = 'Classes/**/*'
-  s.dependency 'Flutter'
-  s.platform = :ios, '13.0'
+  s.ios.dependency 'Flutter'
+  s.osx.dependency 'FlutterMacOS'
+  s.ios.deployment_target = '13.0'
+  s.osx.deployment_target = '10.15'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
     'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386'
