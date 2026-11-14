@@ -28,3 +28,7 @@ flutter:
         pluginClass: GrassrootsBluetoothPlugin
       ios:
         pluginClass: GrassrootsBluetoothPlugin
+        sharedDarwinSource: true
+      macos:
+        pluginClass: GrassrootsBluetoothPlugin
+        sharedDarwinSource: true
